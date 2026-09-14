@@ -15,7 +15,7 @@ void setup() {
     // 가감속 기울기
     lift.setAcceleration(400); // steps/s^2
     // 목표 절대 위치
-    lift.moveTo(100);
+    lift.moveTo(-1000);
 
 }
 
