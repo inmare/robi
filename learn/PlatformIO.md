@@ -1,0 +1,12 @@
+# pio 명령어
+- `pio run`: 펌웨어를 빌드하는 명령어
+  - `-e env_name`: 특정한 환경만 빌드하기
+  - `-t upload`: 빌드 후 업로드
+  - `-t compiledb`: 업로드 대신 compile_commands.json 생성
+- `pio device`: 보드, 시리얼 포트를 다루는 명령어
+  - `list`: 연결된 보드 목록
+  - `monitor`: 시리얼 모니터 `Serial.print, println`으로 보낸 글 보기
+  - `-b 115200`: 이 속도로 읽어라는 명령어. 코드의 `Serial.begin(115200)`과 같아야 함
+- `pio project init`:  프로젝트 메타데이터 갱신
+  - `--ide vscode`: ide 설정
+  - `-e env`: env 기준으로 include 경로 맞추기
