@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <AccelStepper.h>
 
-AccelStepper lift(AccelStepper::DRIVER, 2, 5);
+AccelStepper lift(AccelStepper::DRIVER, 3, 2);
 
 
 void setup() {
