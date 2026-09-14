@@ -11,11 +11,11 @@ void setup() {
     digitalWrite(8, LOW);
 
     // 최대 속도 상한
-    lift.setMaxSpeed(800); // steps/s
+    lift.setMaxSpeed(100); // steps/s
     // 가감속 기울기
-    lift.setAcceleration(400); // steps/s^2
+    lift.setAcceleration(20); // steps/s^2
     // 목표 절대 위치
-    lift.moveTo(2000);
+    lift.moveTo(500);
 
 }
 
