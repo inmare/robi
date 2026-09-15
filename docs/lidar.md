@@ -67,8 +67,10 @@ chmod +x lidar_build_script.sh
 
 셸만으로는 PGM 창이 안 뜬다. `map_scan_test.py` / `route_run.py`의 `m` 키가 ASCII를 찍는다. `#` 벽, `.` 빈 공간, `R` 로봇.
 
-PGM은 PC로 복사한다.
+PGM은 PC로 복사한다. 윈도우 사진 앱은 PGM을 못 연다. `last_map.bmp`를 쓴다.
+
+`m`을 누르면 경로가 터미널에 인쇄된다. 그 **절대 경로**를 쓴다.
 
 ```bash
-scp pi@주소:code_moving_robot/maps/last_map.pgm .
+scp USER@파이IP:/절대경로/maps/last_map.bmp .
 ```

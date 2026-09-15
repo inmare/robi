@@ -1,6 +1,7 @@
 """로봇 기준 occupancy grid. 홀 포즈가 생기면 그 좌표로 add_scan 한다."""
 
 import math
+import struct
 from pathlib import Path
 
 # 로그오즈. 0이면 미지, 양수면 occupied, 음수면 free
@@ -147,6 +148,75 @@ class OccupancyGrid:
         path.write_bytes(header + body)
         return path
 
+    def save_bmp(self, path):
+        """Windows에서 바로 열리는 24bit BMP."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        n = self.n
+        stride = (n * 3 + 3) & ~3
+        image = bytearray(stride * n)
+        for row in range(n):
+            for col in range(n):
+                lo = self.log_odds[row][col]
+                if lo > 0.5:
+                    bgr = (0, 0, 0)
+                elif lo < -0.5:
+                    bgr = (255, 255, 255)
+                else:
+                    bgr = (160, 160, 160)
+                i = row * stride + col * 3
+                image[i] = bgr[0]
+                image[i + 1] = bgr[1]
+                image[i + 2] = bgr[2]
+        info = struct.pack(
+            "<IiiHHIIiiII",
+            40,
+            n,
+            n,
+            1,
+            24,
+            0,
+            len(image),
+            0,
+            0,
+            0,
+            0,
+        )
+        header = struct.pack("<2sIHHI", b"BM", 54 + len(image), 0, 0, 54)
+        path.write_bytes(header + info + image)
+        return path
+
+    def _mapped_window(self, marks=None, pose=None, pad_m=0.8):
+        n = self.n
+        r0, r1, c0, c1 = n, -1, n, -1
+        for row in range(n):
+            for col in range(n):
+                if abs(self.log_odds[row][col]) > 0.5:
+                    r0 = min(r0, row)
+                    r1 = max(r1, row)
+                    c0 = min(c0, col)
+                    c1 = max(c1, col)
+        extras = list(marks or [])
+        if pose is not None:
+            extras.append((pose[0], pose[1], "R"))
+        for mx, my, _ch in extras:
+            cell = self.world_to_cell(mx, my)
+            if cell is None:
+                continue
+            r0 = min(r0, cell[0])
+            r1 = max(r1, cell[0])
+            c0 = min(c0, cell[1])
+            c1 = max(c1, cell[1])
+        if r1 < 0:
+            return 0, n, 0, n
+        pad = max(2, int(pad_m / self.resolution))
+        return (
+            max(0, r0 - pad),
+            min(n, r1 + 1 + pad),
+            max(0, c0 - pad),
+            min(n, c1 + 1 + pad),
+        )
+
     @classmethod
     def from_pgm(cls, path, size_m=None, resolution=0.05):
         """save_pgm으로 쓴 P5를 다시 occupancy로 읽는다."""
@@ -177,7 +247,7 @@ class OccupancyGrid:
         grid.occ_n = occ
         return grid
 
-    def render_ascii(self, cols=72, rows=36, pose=None, marks=None):
+    def render_ascii(self, cols=72, rows=36, pose=None, marks=None, zoom=True):
         """SSH 터미널용. #=벽  .=빈 공간  공백=미지  R=로봇. marks는 (x,y,글자)."""
         n = self.n
         overlays = []
@@ -187,14 +257,20 @@ class OccupancyGrid:
             overlays.append((pose[0], pose[1], "R"))
         else:
             overlays.append((0.0, 0.0, "R"))
+        if zoom:
+            br0, br1, bc0, bc1 = self._mapped_window(marks, pose)
+        else:
+            br0, br1, bc0, bc1 = 0, n, 0, n
+        h = max(1, br1 - br0)
+        w = max(1, bc1 - bc0)
         lines = []
         for out_r in range(rows):
-            src_r0 = int((rows - 1 - out_r) * n / rows)
-            src_r1 = int((rows - out_r) * n / rows)
+            src_r0 = br0 + int((rows - 1 - out_r) * h / rows)
+            src_r1 = br0 + int((rows - out_r) * h / rows)
             row_chars = []
             for out_c in range(cols):
-                src_c0 = int(out_c * n / cols)
-                src_c1 = int((out_c + 1) * n / cols)
+                src_c0 = bc0 + int(out_c * w / cols)
+                src_c1 = bc0 + int((out_c + 1) * w / cols)
                 occupied = False
                 free = False
                 for sr in range(src_r0, max(src_r1, src_r0 + 1)):

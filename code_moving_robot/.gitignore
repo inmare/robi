@@ -3,6 +3,8 @@ YDLidar-SDK/
 __pycache__/
 *.pyc
 maps/*.pgm
+maps/*.bmp
+maps/*.txt
 maps/*.npz
 maps/*.npy
 maps/*.json

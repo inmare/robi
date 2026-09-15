@@ -29,6 +29,11 @@ FRONT_STOP_DEG = 25.0
 ARRIVE_M = 0.15
 INFLATE_M = 0.16
 
+# 테스트 주행 때 경로를 시간마다 찍는다. 시연은 저장 JSON을 재생.
+RECORD_DT = 1.0
+RECORD_MIN_M = 0.25
+RECORD_MIN_YAW = 0.40
+
 # X4 원시 각은 시계 방향. 오도메트리는 반시계(+yaw).
 # SDK Inverted에 의존하지 않고 read()에서 곱한다. 좌우가 뒤집히면 +1.
 LIDAR_ANGLE_SIGN = -1

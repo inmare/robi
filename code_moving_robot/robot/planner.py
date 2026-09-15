@@ -35,7 +35,7 @@ def _clear_around(blocked, cell, n, radius_cells=3):
                 blocked.discard((rr, cc))
 
 
-def astar(grid, start_xy, goal_xy, inflate_m=INFLATE_M):
+def astar(grid, start_xy, goal_xy, inflate_m=INFLATE_M, free_only=False):
     """성공하면 월드 좌표 [(x,y), ...]. 실패하면 빈 리스트."""
     start = grid.world_to_cell(start_xy[0], start_xy[1])
     goal = grid.world_to_cell(goal_xy[0], goal_xy[1])
@@ -76,10 +76,30 @@ def astar(grid, start_xy, goal_xy, inflate_m=INFLATE_M):
             if nxt in blocked:
                 continue
             lo = grid.log_odds[nxt[0]][nxt[1]]
+            if free_only and lo > -0.2 and nxt != start and nxt != goal:
+                continue
             extra = 1.4 if lo > -0.2 else 1.0
             ng = g + step * extra
             if ng < gscore.get(nxt, 1e9):
                 gscore[nxt] = ng
                 came[nxt] = cur
                 heapq.heappush(openh, (ng + h(nxt, goal), ng, nxt))
+    return []
+
+
+def plan(grid, start_xy, goal_xy):
+    """부풀리기를 줄여가며 길을 찾는다. 없으면 빈 리스트 (직선 관통 없음)."""
+    for inflate_m, free_only in (
+        (INFLATE_M, True),
+        (0.10, True),
+        (0.06, True),
+        (INFLATE_M, False),
+        (0.08, False),
+        (0.0, False),
+    ):
+        path = astar(
+            grid, start_xy, goal_xy, inflate_m=inflate_m, free_only=free_only
+        )
+        if len(path) >= 2:
+            return path
     return []

@@ -19,13 +19,24 @@ from robot.drive import Drive
 from robot.follow import Follower
 from robot.grid import OccupancyGrid
 from robot.lidar import Lidar
-from robot.localize import match_heading
+from robot.localize import match_heading, wrap_angle
 from robot.odometry import Odometry
-from robot.pins import ARRIVE_M, FRONT_STOP_DEG, FRONT_STOP_M, TELEOP_SPEED, TRACK_M
-from robot.planner import astar
+from robot.pins import (
+    ARRIVE_M,
+    FRONT_STOP_DEG,
+    FRONT_STOP_M,
+    RECORD_DT,
+    RECORD_MIN_M,
+    RECORD_MIN_YAW,
+    TELEOP_SPEED,
+    TRACK_M,
+)
+from robot.planner import plan
 from robot.slam import Slam
 
 OUT_PGM = ROOT / "maps" / "last_map.pgm"
+OUT_BMP = ROOT / "maps" / "last_map.bmp"
+OUT_TXT = ROOT / "maps" / "last_map.txt"
 OUT_JSON = ROOT / "maps" / "last_route.json"
 
 
@@ -73,7 +84,11 @@ def thin_path(points, step_m=0.18):
 
 
 def remaining_targets(odo, start, waypoints, goal):
-    seq = [start] + list(waypoints)
+    seq = []
+    near_start = math.hypot(odo.x - start[0], odo.y - start[1]) <= 0.45
+    if not near_start:
+        seq.append(start)
+    seq.extend(waypoints)
     if goal is not None:
         seq.append(goal)
     out = []
@@ -89,9 +104,9 @@ def build_path(grid, odo, targets):
     path = []
     cur = (odo.x, odo.y)
     for tgt in targets:
-        chunk = astar(grid, cur, (tgt[0], tgt[1]))
+        chunk = plan(grid, cur, (tgt[0], tgt[1]))
         if len(chunk) < 2:
-            chunk = [cur, (tgt[0], tgt[1])]
+            return []
         if path:
             chunk = chunk[1:]
         path.extend(chunk)
@@ -103,8 +118,51 @@ def pose_tuple(odo):
     return [round(odo.x, 3), round(odo.y, 3), round(odo.yaw, 3)]
 
 
-def save_session(grid, odo, start, waypoints, goal):
+def last_path_pose(start, waypoints, goal):
+    if goal is not None:
+        return goal
+    if waypoints:
+        return waypoints[-1]
+    return start
+
+
+def maybe_auto_record(odo, start, waypoints, now, last_t):
+    if now - last_t < RECORD_DT:
+        return waypoints, last_t, False
+    last = last_path_pose(start, waypoints, None)
+    dist = math.hypot(odo.x - last[0], odo.y - last[1])
+    last_yaw = last[2] if len(last) > 2 else 0.0
+    dyaw = abs(wrap_angle(odo.yaw - last_yaw))
+    if dist < RECORD_MIN_M and dyaw < RECORD_MIN_YAW:
+        return waypoints, last_t, False
+    if len(waypoints) >= 80:
+        return waypoints, now, False
+    waypoints.append(pose_tuple(odo))
+    return waypoints, now, True
+
+
+def seal_goal(odo, waypoints, goal):
+    """기록 종료 때 지금 자리를 도착으로. 마지막 경유와 같으면 합친다."""
+    if goal is not None:
+        return waypoints, goal
+    p = pose_tuple(odo)
+    if waypoints:
+        last = waypoints[-1]
+        if math.hypot(p[0] - last[0], p[1] - last[1]) <= ARRIVE_M:
+            return waypoints[:-1], last
+    return waypoints, p
+
+
+def save_session(grid, odo, start, waypoints, goal, ascii_map=None):
     grid.save_pgm(OUT_PGM)
+    grid.save_bmp(OUT_BMP)
+    if ascii_map is None:
+        ascii_map = grid.render_ascii(
+            pose=(odo.x, odo.y),
+            marks=mark_list(start, waypoints, goal),
+        )
+    OUT_TXT.parent.mkdir(parents=True, exist_ok=True)
+    OUT_TXT.write_text(ascii_map + "\n", encoding="utf-8")
     data = {
         "start": start,
         "waypoints": waypoints,
@@ -113,9 +171,18 @@ def save_session(grid, odo, start, waypoints, goal):
         "track_m": TRACK_M,
         "grid": {"size_m": grid.size_m, "resolution": grid.resolution},
     }
-    OUT_JSON.parent.mkdir(parents=True, exist_ok=True)
     OUT_JSON.write_text(json.dumps(data, indent=2), encoding="utf-8")
     return OUT_PGM, OUT_JSON
+
+
+def print_save_hint():
+    pgm = OUT_PGM.resolve()
+    bmp = OUT_BMP.resolve()
+    txt = OUT_TXT.resolve()
+    print(f"저장 {pgm}")
+    print(f"그림 {bmp}  (윈도우에서 열림)")
+    print(f"글자 {txt}")
+    print(f"PC에서: scp USER@파이IP:{bmp} .")
 
 
 def load_session():
@@ -199,9 +266,9 @@ def mark_list(start, waypoints, goal):
 
 def help_text():
     return (
-        "wasd 이동  스페이스 정지  +/- 속도\n"
-        "1 시작점  2 경유점  3 도착점  m 지도  r 자율주행  t 수동\n"
-        "l 방향 다시 맞춤  p 좌표  S 저장  q 종료  | 지도는 SLAM, 모터 6V는 이 글 이후"
+        "wasd 이동  스페이스 정지  +/- 속도  e 경로기록 on/off\n"
+        "수동: 1 시작  2 경유  3 도착  | 기록은 1초마다, 도착에서 e\n"
+        "m 지도  r 재생  t 수동  l 방향  p 좌표  S 저장  q 종료"
     )
 
 
@@ -229,6 +296,8 @@ def main():
         last_status = 0.0
         last_points = None
         slam = None
+        recording = True
+        last_record_t = time.monotonic()
 
         drive.enable()
         lidar.start()
@@ -239,22 +308,34 @@ def main():
                 start = data.get("start") or [0.0, 0.0, 0.0]
                 waypoints = list(data.get("waypoints") or [])
                 goal = data.get("goal")
-                if goal is not None:
-                    print("저장한 도착점이 있습니다. r 이면 그쪽으로 갑니다")
+                if goal is not None or waypoints:
+                    print("저장한 경로가 있습니다. r 이면 재생, e 면 새로 찍기")
+                    recording = False
                 else:
-                    print("저장 지도를 썼습니다. 도착은 3으로 찍으세요")
+                    print("저장 지도를 썼습니다. 주행하면 경로가 자동으로 찍힙니다")
             else:
                 grid = OccupancyGrid(size_m=16.0, resolution=0.05)
         else:
             grid = OccupancyGrid(size_m=16.0, resolution=0.05)
         slam = Slam(grid)
         slam.seed(odo)
-        print("지도+조작 시작 (스캔 SLAM)")
+        if recording:
+            print("지도+조작 시작. 주행 중 1초마다 경로 기록, 도착에서 e")
+        else:
+            print("지도+조작 시작. 저장 경로 재생. r")
         while True:
             points = lidar.read()
             if points:
                 last_points = points
                 slam.process(points, odo)
+
+            if mode == "teleop" and recording and goal is None:
+                now = time.monotonic()
+                waypoints, last_record_t, added = maybe_auto_record(
+                    odo, start, waypoints, now, last_record_t
+                )
+                if added:
+                    print(f"경로 {len(waypoints)} {waypoints[-1]}")
 
             if mode == "auto":
                 if front_blocked(last_points):
@@ -276,7 +357,8 @@ def main():
                 if now - last_status >= 2.0:
                     last_status = now
                     print(
-                        f"[{mode}] x={odo.x:.2f} y={odo.y:.2f} "
+                        f"[{mode}] rec={'ON' if recording else 'off'} "
+                        f"x={odo.x:.2f} y={odo.y:.2f} "
                         f"yaw={math.degrees(odo.yaw):.0f} "
                         f"wp={len(waypoints)} goal={'O' if goal else '-'} "
                         f"slam={'-' if slam.last_score is None else f'{slam.last_score:.2f}'}"
@@ -313,6 +395,16 @@ def main():
             elif ch == "-":
                 speed = max(0.42, speed - 0.04)
                 print(f"속도 {speed:.2f}")
+            elif ch == "e":
+                if recording:
+                    waypoints, goal = seal_goal(odo, waypoints, goal)
+                    recording = False
+                    print(f"경로 기록 끝. 도착 {goal} 점 {len(waypoints)}개. r 로 재생")
+                else:
+                    recording = True
+                    goal = None
+                    last_record_t = time.monotonic()
+                    print("경로 기록 시작. 도착 칸에서 다시 e")
             elif ch == "1":
                 start = pose_tuple(odo)
                 print(f"시작 {start}")
@@ -320,7 +412,8 @@ def main():
                 waypoints.append(pose_tuple(odo))
                 print(f"경유 {len(waypoints)} {waypoints[-1]}")
             elif ch == "3":
-                goal = pose_tuple(odo)
+                waypoints, goal = seal_goal(odo, waypoints, goal)
+                recording = False
                 print(f"도착 {goal}")
             elif ch == "p":
                 print(
@@ -345,23 +438,38 @@ def main():
                     f"score={found.score:.2f}{extra}"
                 )
             elif ch == "m":
-                print(
-                    grid.render_ascii(
-                        pose=(odo.x, odo.y),
-                        marks=mark_list(start, waypoints, goal),
-                    )
+                ascii_map = grid.render_ascii(
+                    pose=(odo.x, odo.y),
+                    marks=mark_list(start, waypoints, goal),
                 )
+                print(ascii_map)
+                save_session(
+                    grid, odo, start, waypoints, goal, ascii_map=ascii_map
+                )
+                print_save_hint()
             elif ch == "S":
-                pgm, js = save_session(grid, odo, start, waypoints, goal)
-                print(f"저장 {pgm} {js}")
+                save_session(grid, odo, start, waypoints, goal)
+                print_save_hint()
             elif ch == "r":
+                if recording:
+                    waypoints, goal = seal_goal(odo, waypoints, goal)
+                    recording = False
+                    print(f"기록 종료. 도착 {goal}")
                 targets = remaining_targets(odo, start, waypoints, goal)
                 if not targets:
                     print("이미 찍은 점에 다 와 있습니다")
                     continue
+                bits = []
+                for p in targets:
+                    dist = math.hypot(odo.x - p[0], odo.y - p[1])
+                    bits.append(f"({p[0]:.2f},{p[1]:.2f}) {dist:.2f}m")
+                print("다음 목표", " → ".join(bits))
                 path = build_path(grid, odo, targets)
                 if len(path) < 2:
-                    print("경로 없음. 지도를 더 그리고 빈 칸으로 찍으세요")
+                    print(
+                        "경로 없음. 벽(#)이 길을 막습니다. "
+                        "가운데를 더 비우며 그린 뒤 r. 직선으로 벽을 뚫지 않습니다"
+                    )
                     continue
                 follower = Follower(path)
                 mode = "auto"
@@ -380,7 +488,8 @@ def main():
         keys.close()
         if grid is not None and odo is not None:
             save_session(grid, odo, start, waypoints, goal)
-            print("라이다·모터 OFF. 지도 저장", OUT_PGM)
+            print("라이다·모터 OFF. 지도 저장")
+            print_save_hint()
 
 
 if __name__ == "__main__":
