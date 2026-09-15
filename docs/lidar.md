@@ -10,6 +10,8 @@
 - `TYPE_TRIANGLE`, 시리얼, 스캔 7Hz, 샘플레이트 5
 - `SingleChannel = True`
 - `SupportMotorDtrCtrl = False` (정지 때 DTR을 올림)
+- `Inverted = True` (X4 기본 각은 시계 방향. 오도메트리 yaw는 반시계라 반드시 뒤집는다)
+- `Reversion = False` (라이다 0°가 로봇 앞. 케이블 쪽이 앞이면 True로)
 
 ## 모터가 안 꺼질 때
 

@@ -52,6 +52,11 @@ class Odometry:
         self.y += dc * math.sin(self.yaw)
         self.yaw = wrap_angle(self.yaw + dyaw)
 
+    def set_pose(self, x, y, yaw):
+        self.x = x
+        self.y = y
+        self.yaw = wrap_angle(yaw)
+
     def reset(self):
         self.x = 0.0
         self.y = 0.0

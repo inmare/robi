@@ -19,8 +19,9 @@ code_moving_robot/
     pins.py        GPIO·바퀴 상수. TRACK_M 은 자로 잰 좌우 접지 중심 거리
     drive.py       좌우 PWM
     odometry.py    홀 + 명령 부호로 x,y,yaw
-    lidar.py       X4 Pro 시작·정지
+    lidar.py       X4 Pro 시작·정지. Inverted=True
     grid.py        occupancy grid
+    localize.py    스캔-맵 맞춤. 재실행 때 yaw 복원
     planner.py     A*
     follow.py      경로 점 추종
   tests/

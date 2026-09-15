@@ -69,6 +69,12 @@ class Lidar:
         laser.setlidaropt(ydlidar.LidarPropSingleChannel, True)
         # False: start=DTR low(회전), stop=DTR high(정지). X4 Pro M_CTR 극성에 맞춤
         laser.setlidaropt(ydlidar.LidarPropSupportMotorDtrCtrl, False)
+        # 기본 각은 시계 방향. 오도메트리는 반시계(+yaw)라 맞추지 않으면
+        # 돌 때마다 벽이 원형으로 번진다.
+        if hasattr(ydlidar, "LidarPropInverted"):
+            laser.setlidaropt(ydlidar.LidarPropInverted, True)
+        if hasattr(ydlidar, "LidarPropReversion"):
+            laser.setlidaropt(ydlidar.LidarPropReversion, False)
         return laser
 
     def start(self):

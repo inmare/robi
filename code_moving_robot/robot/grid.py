@@ -12,6 +12,40 @@ RANGE_MIN = 0.12
 RANGE_MAX = 8.0
 
 
+def _read_p5(path):
+    raw = Path(path).read_bytes()
+    if not raw.startswith(b"P5"):
+        raise ValueError("P5 PGM이 아닙니다")
+    idx = 2
+
+    def token():
+        nonlocal idx
+        while idx < len(raw) and raw[idx] in b" \t\r\n":
+            idx += 1
+        if idx < len(raw) and raw[idx] == ord("#"):
+            while idx < len(raw) and raw[idx] not in b"\n":
+                idx += 1
+            return token()
+        start = idx
+        while idx < len(raw) and raw[idx] not in b" \t\r\n":
+            idx += 1
+        return raw[start:idx]
+
+    width = int(token())
+    height = int(token())
+    maxval = int(token())
+    if maxval != 255:
+        raise ValueError("maxval 255만 됩니다")
+    if idx < len(raw) and raw[idx] in b"\r\n":
+        idx += 1
+        if raw[idx - 1] == 13 and idx < len(raw) and raw[idx] == 10:
+            idx += 1
+    body = raw[idx:]
+    if len(body) < width * height:
+        raise ValueError("PGM이 잘렸습니다")
+    return width, height, body
+
+
 class OccupancyGrid:
     def __init__(self, size_m=12.0, resolution=0.05):
         self.size_m = size_m
@@ -21,6 +55,7 @@ class OccupancyGrid:
         self.origin_x = -size_m / 2
         self.origin_y = -size_m / 2
         self.log_odds = [[0.0] * n for _ in range(n)]
+        self.occ_n = 0
 
     def world_to_cell(self, x, y):
         col = int((x - self.origin_x) / self.resolution)
@@ -36,11 +71,18 @@ class OccupancyGrid:
 
 
     def _add(self, row, col, delta):
-        v = self.log_odds[row][col] + delta
+        old = self.log_odds[row][col]
+        v = old + delta
         if v < L_MIN:
             v = L_MIN
         elif v > L_MAX:
             v = L_MAX
+        was = old > 0.5
+        now = v > 0.5
+        if now and not was:
+            self.occ_n += 1
+        elif was and not now:
+            self.occ_n -= 1
         self.log_odds[row][col] = v
 
     def _walk(self, r0, c0, r1, c1):
@@ -104,6 +146,36 @@ class OccupancyGrid:
                 body[row * n + col] = pix
         path.write_bytes(header + body)
         return path
+
+    @classmethod
+    def from_pgm(cls, path, size_m=None, resolution=0.05):
+        """save_pgm으로 쓴 P5를 다시 occupancy로 읽는다."""
+        width, height, body = _read_p5(path)
+        if width != height:
+            raise ValueError(f"정사각 PGM만 됩니다 ({width}x{height})")
+        if size_m is None:
+            size_m = width * resolution
+        grid = cls(size_m=size_m, resolution=resolution)
+        if grid.n != width:
+            grid = cls(size_m=width * resolution, resolution=resolution)
+        if grid.n != width:
+            raise ValueError("격자 크기와 PGM이 안 맞습니다")
+        n = grid.n
+        occ = 0
+        for row in range(n):
+            src = n - 1 - row
+            for col in range(n):
+                pix = body[row * n + col]
+                if pix < 80:
+                    lo = 2.0
+                    occ += 1
+                elif pix > 200:
+                    lo = -2.0
+                else:
+                    lo = 0.0
+                grid.log_odds[src][col] = lo
+        grid.occ_n = occ
+        return grid
 
     def render_ascii(self, cols=72, rows=36, pose=None, marks=None):
         """SSH 터미널용. #=벽  .=빈 공간  공백=미지  R=로봇. marks는 (x,y,글자)."""

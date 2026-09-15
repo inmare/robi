@@ -19,6 +19,7 @@ from robot.drive import Drive
 from robot.follow import Follower
 from robot.grid import OccupancyGrid
 from robot.lidar import Lidar
+from robot.localize import match_heading, match_local
 from robot.odometry import Odometry
 from robot.pins import ARRIVE_M, FRONT_STOP_DEG, FRONT_STOP_M, TELEOP_SPEED, TRACK_M
 from robot.planner import astar
@@ -109,10 +110,86 @@ def save_session(grid, odo, start, waypoints, goal):
         "goal": goal,
         "pose": pose_tuple(odo),
         "track_m": TRACK_M,
+        "grid": {"size_m": grid.size_m, "resolution": grid.resolution},
     }
     OUT_JSON.parent.mkdir(parents=True, exist_ok=True)
     OUT_JSON.write_text(json.dumps(data, indent=2), encoding="utf-8")
     return OUT_PGM, OUT_JSON
+
+
+def load_session():
+    if not OUT_JSON.exists() or not OUT_PGM.exists():
+        return None
+    try:
+        data = json.loads(OUT_JSON.read_text(encoding="utf-8"))
+        meta = data.get("grid") or {}
+        grid = OccupancyGrid.from_pgm(
+            OUT_PGM,
+            size_m=float(meta.get("size_m", 16.0)),
+            resolution=float(meta.get("resolution", 0.05)),
+        )
+        return data, grid
+    except (OSError, ValueError, json.JSONDecodeError, TypeError) as exc:
+        print(f"이전 지도 읽기 실패: {exc}")
+        return None
+
+
+def collect_scan(lidar, n=4, timeout_s=8.0):
+    best = None
+    got = 0
+    t0 = time.monotonic()
+    while got < n and time.monotonic() - t0 < timeout_s:
+        points = lidar.read()
+        if not points:
+            continue
+        got += 1
+        if best is None or len(points) > len(best):
+            best = points
+    return best
+
+
+def restore_heading(grid, odo, lidar, data):
+    points = collect_scan(lidar)
+    if not points:
+        print("방향 맞춤용 스캔이 없습니다")
+        return False
+    start = data.get("start") or [0.0, 0.0, 0.0]
+    spots = [("시작점", float(start[0]), float(start[1]))]
+    pose = data.get("pose")
+    if pose is not None and (
+        abs(float(pose[0]) - float(start[0])) > 0.2
+        or abs(float(pose[1]) - float(start[1])) > 0.2
+    ):
+        spots.append(("마지막 위치", float(pose[0]), float(pose[1])))
+    best = None
+    best_name = None
+    for name, x, y in spots:
+        found = match_heading(grid, x, y, points)
+        if found is None:
+            continue
+        if best is None or found.score > best.score:
+            best = found
+            best_name = name
+    if best is None:
+        print("이전 지도와 지금 스캔이 안 맞습니다. 빈 지도로 다시 그립니다")
+        return False
+    if best.ambiguous:
+        print("방향이 여러 개로 맞습니다. 지도를 다시 그린 뒤 쓰세요")
+        return False
+    odo.set_pose(best.x, best.y, best.yaw)
+    extra = " (방향이 비슷해서 애매할 수 있음)" if best.ambiguous else ""
+    print(
+        f"방향 맞춤 {best_name} x={best.x:.2f} y={best.y:.2f} "
+        f"yaw={math.degrees(best.yaw):.0f}° score={best.score:.2f}{extra}"
+    )
+    return True
+
+
+def apply_scan(grid, odo, points):
+    matched = match_local(grid, odo.x, odo.y, odo.yaw, points)
+    if matched is not None:
+        odo.set_pose(matched.x, matched.y, matched.yaw)
+    grid.add_scan(odo.x, odo.y, odo.yaw, points)
 
 
 def mark_list(start, waypoints, goal):
@@ -130,7 +207,7 @@ def help_text():
     return (
         "wasd 이동  스페이스 정지  +/- 속도\n"
         "1 시작점  2 경유점  3 도착점  m 지도  r 자율주행  t 수동\n"
-        "p 좌표  s 저장  q 종료  | 모터 6V는 이 글 이후에 켜세요"
+        "l 방향 다시 맞춤  p 좌표  S 저장  q 종료  | 모터 6V는 이 글 이후에 켜세요"
     )
 
 
@@ -151,7 +228,7 @@ def main():
         drive = Drive()
         odo = Odometry()
         lidar = Lidar()
-        grid = OccupancyGrid(size_m=16.0, resolution=0.05)
+        loaded = load_session()
         speed = TELEOP_SPEED
         mode = "teleop"
         follower = None
@@ -160,12 +237,27 @@ def main():
 
         drive.enable()
         lidar.start()
+        if loaded is not None:
+            data, loaded_grid = loaded
+            if restore_heading(loaded_grid, odo, lidar, data):
+                grid = loaded_grid
+                start = data.get("start") or [0.0, 0.0, 0.0]
+                waypoints = list(data.get("waypoints") or [])
+                goal = data.get("goal")
+                if goal is not None:
+                    print("저장한 도착점이 있습니다. r 이면 그쪽으로 갑니다")
+                else:
+                    print("저장 지도를 썼습니다. 도착은 3으로 찍으세요")
+            else:
+                grid = OccupancyGrid(size_m=16.0, resolution=0.05)
+        else:
+            grid = OccupancyGrid(size_m=16.0, resolution=0.05)
         print("지도+조작 시작")
         while True:
             points = lidar.read()
             if points:
                 last_points = points
-                grid.add_scan(odo.x, odo.y, odo.yaw, points)
+                apply_scan(grid, odo, points)
 
             if mode == "auto":
                 if front_blocked(last_points):
@@ -237,6 +329,22 @@ def main():
                     f"pose {pose_tuple(odo)} start {start} "
                     f"wp {waypoints} goal {goal}"
                 )
+            elif ch == "l":
+                scan = last_points if last_points else collect_scan(lidar, n=2)
+                if not scan:
+                    print("스캔 없음")
+                    continue
+                found = match_heading(grid, odo.x, odo.y, scan)
+                if found is None:
+                    print("방향 맞춤 실패. 지도를 더 그리거나 시작 칸에 두세요")
+                    continue
+                odo.set_pose(found.x, found.y, found.yaw)
+                extra = " (애매)" if found.ambiguous else ""
+                print(
+                    f"방향 맞춤 x={found.x:.2f} y={found.y:.2f} "
+                    f"yaw={math.degrees(found.yaw):.0f}° "
+                    f"score={found.score:.2f}{extra}"
+                )
             elif ch == "m":
                 print(
                     grid.render_ascii(
@@ -244,7 +352,7 @@ def main():
                         marks=mark_list(start, waypoints, goal),
                     )
                 )
-            elif ch == "s":
+            elif ch == "S":
                 pgm, js = save_session(grid, odo, start, waypoints, goal)
                 print(f"저장 {pgm} {js}")
             elif ch == "r":
