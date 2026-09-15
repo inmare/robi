@@ -1,0 +1,7 @@
+.venv/
+YDLidar-SDK/
+__pycache__/
+*.pyc
+maps/*.pgm
+maps/*.npz
+maps/*.npy
