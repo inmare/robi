@@ -5,3 +5,4 @@ __pycache__/
 maps/*.pgm
 maps/*.npz
 maps/*.npy
+maps/*.json

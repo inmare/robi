@@ -29,6 +29,12 @@ class OccupancyGrid:
             return row, col
         return None
 
+    def cell_to_world(self, row, col):
+        x = self.origin_x + (col + 0.5) * self.resolution
+        y = self.origin_y + (row + 0.5) * self.resolution
+        return x, y
+
+
     def _add(self, row, col, delta):
         v = self.log_odds[row][col] + delta
         if v < L_MIN:
@@ -99,10 +105,16 @@ class OccupancyGrid:
         path.write_bytes(header + body)
         return path
 
-    def render_ascii(self, cols=72, rows=36):
-        """SSH 터미널용. #=벽  .=빈 공간  공백=미지  R=원점."""
+    def render_ascii(self, cols=72, rows=36, pose=None, marks=None):
+        """SSH 터미널용. #=벽  .=빈 공간  공백=미지  R=로봇. marks는 (x,y,글자)."""
         n = self.n
-        origin = self.world_to_cell(0.0, 0.0)
+        overlays = []
+        if marks:
+            overlays.extend(marks)
+        if pose is not None:
+            overlays.append((pose[0], pose[1], "R"))
+        else:
+            overlays.append((0.0, 0.0, "R"))
         lines = []
         for out_r in range(rows):
             src_r0 = int((rows - 1 - out_r) * n / rows)
@@ -122,12 +134,17 @@ class OccupancyGrid:
                             occupied = True
                         elif lo < -0.5:
                             free = True
-                if origin is not None:
-                    orow, ocol = origin
-                    if src_r0 <= orow < src_r1 and src_c0 <= ocol < src_c1:
-                        row_chars.append("R")
+                mark = None
+                for mx, my, ch in overlays:
+                    cell = self.world_to_cell(mx, my)
+                    if cell is None:
                         continue
-                if occupied:
+                    orow, ocol = cell
+                    if src_r0 <= orow < src_r1 and src_c0 <= ocol < src_c1:
+                        mark = ch
+                if mark:
+                    row_chars.append(mark)
+                elif occupied:
                     row_chars.append("#")
                 elif free:
                     row_chars.append(".")
