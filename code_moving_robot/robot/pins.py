@@ -28,3 +28,7 @@ FRONT_STOP_M = 0.35
 FRONT_STOP_DEG = 25.0
 ARRIVE_M = 0.15
 INFLATE_M = 0.16
+
+# X4 원시 각은 시계 방향. 오도메트리는 반시계(+yaw).
+# SDK Inverted에 의존하지 않고 read()에서 곱한다. 좌우가 뒤집히면 +1.
+LIDAR_ANGLE_SIGN = -1

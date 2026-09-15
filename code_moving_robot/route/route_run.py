@@ -19,10 +19,11 @@ from robot.drive import Drive
 from robot.follow import Follower
 from robot.grid import OccupancyGrid
 from robot.lidar import Lidar
-from robot.localize import match_heading, match_local
+from robot.localize import match_heading
 from robot.odometry import Odometry
 from robot.pins import ARRIVE_M, FRONT_STOP_DEG, FRONT_STOP_M, TELEOP_SPEED, TRACK_M
 from robot.planner import astar
+from robot.slam import Slam
 
 OUT_PGM = ROOT / "maps" / "last_map.pgm"
 OUT_JSON = ROOT / "maps" / "last_route.json"
@@ -185,13 +186,6 @@ def restore_heading(grid, odo, lidar, data):
     return True
 
 
-def apply_scan(grid, odo, points):
-    matched = match_local(grid, odo.x, odo.y, odo.yaw, points)
-    if matched is not None:
-        odo.set_pose(matched.x, matched.y, matched.yaw)
-    grid.add_scan(odo.x, odo.y, odo.yaw, points)
-
-
 def mark_list(start, waypoints, goal):
     marks = []
     if start:
@@ -207,7 +201,7 @@ def help_text():
     return (
         "wasd 이동  스페이스 정지  +/- 속도\n"
         "1 시작점  2 경유점  3 도착점  m 지도  r 자율주행  t 수동\n"
-        "l 방향 다시 맞춤  p 좌표  S 저장  q 종료  | 모터 6V는 이 글 이후에 켜세요"
+        "l 방향 다시 맞춤  p 좌표  S 저장  q 종료  | 지도는 SLAM, 모터 6V는 이 글 이후"
     )
 
 
@@ -234,6 +228,7 @@ def main():
         follower = None
         last_status = 0.0
         last_points = None
+        slam = None
 
         drive.enable()
         lidar.start()
@@ -252,12 +247,14 @@ def main():
                 grid = OccupancyGrid(size_m=16.0, resolution=0.05)
         else:
             grid = OccupancyGrid(size_m=16.0, resolution=0.05)
-        print("지도+조작 시작")
+        slam = Slam(grid)
+        slam.seed(odo)
+        print("지도+조작 시작 (스캔 SLAM)")
         while True:
             points = lidar.read()
             if points:
                 last_points = points
-                apply_scan(grid, odo, points)
+                slam.process(points, odo)
 
             if mode == "auto":
                 if front_blocked(last_points):
@@ -281,7 +278,8 @@ def main():
                     print(
                         f"[{mode}] x={odo.x:.2f} y={odo.y:.2f} "
                         f"yaw={math.degrees(odo.yaw):.0f} "
-                        f"wp={len(waypoints)} goal={'O' if goal else '-'}"
+                        f"wp={len(waypoints)} goal={'O' if goal else '-'} "
+                        f"slam={'-' if slam.last_score is None else f'{slam.last_score:.2f}'}"
                     )
                 continue
 
@@ -339,6 +337,7 @@ def main():
                     print("방향 맞춤 실패. 지도를 더 그리거나 시작 칸에 두세요")
                     continue
                 odo.set_pose(found.x, found.y, found.yaw)
+                slam.seed(odo)
                 extra = " (애매)" if found.ambiguous else ""
                 print(
                     f"방향 맞춤 x={found.x:.2f} y={found.y:.2f} "

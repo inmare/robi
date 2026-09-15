@@ -19,9 +19,10 @@ code_moving_robot/
     pins.py        GPIO·바퀴 상수. TRACK_M 은 자로 잰 좌우 접지 중심 거리
     drive.py       좌우 PWM
     odometry.py    홀 + 명령 부호로 x,y,yaw
-    lidar.py       X4 Pro 시작·정지. Inverted=True
+    lidar.py       X4 Pro 시작·정지. 각 부호는 LIDAR_ANGLE_SIGN
     grid.py        occupancy grid
-    localize.py    스캔-맵 맞춤. 재실행 때 yaw 복원
+    localize.py    스캔-맵 상관 맞춤
+    slam.py        스캔-투-맵 SLAM. 홀은 예측, 라이다가 포즈
     planner.py     A*
     follow.py      경로 점 추종
   tests/
@@ -47,7 +48,7 @@ uv pip install --python .venv/bin/python gpiozero
 ## 목표
 
 1. 라이다 스캔. 안 쓸 때는 모터(DTR) 정지
-2. 직접 몰면서 occupancy grid + 홀 오도메트리
+2. 직접 몰면서 occupancy grid. 포즈는 홀 예측 + 스캔 SLAM
 3. 시작·경유·도착을 그 자리에서 찍고 A*로 따라감
 4. 주행 중 장애물은 **지금 스캔** 전방 거리로 정지. 저장 지도만 믿지 않음
 5. 시연은 MQTT + 웹 (아직 없음)

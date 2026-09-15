@@ -16,7 +16,7 @@ def wrap_angle(a):
         a += 2 * math.pi
     return a
 
-MIN_OCC = 80
+MIN_OCC = 40
 MIN_HITS = 16
 MIN_LOCAL_SCORE = 0.08
 MIN_HEADING_SCORE = 0.18
@@ -81,28 +81,71 @@ def score_pose(grid, x, y, yaw, points):
     return score / used
 
 
-def match_local(grid, x, y, yaw, points, xy_m=0.10, yaw_rad=0.38):
-    """오도메트리 근처에서만 맞춘다. 맵이 얇으면 None."""
+def match_scan(grid, x, y, yaw, points, xy_m=0.12, yaw_rad=0.4):
+    """오도메트리 예측 근처에서 스캔을 맵에 맞춘다. 창은 호출쪽에서 키운다."""
     if grid.occ_n < MIN_OCC:
         return None
-    ds = downsample_scan(points)
+    ds = downsample_scan(points, buckets=48)
     if len(ds) < MIN_HITS:
         return None
-    prior = score_pose(grid, x, y, yaw, ds)
+    xy_step = max(0.05, xy_m / 3.0)
+    yaw_step = math.radians(6)
+    if yaw_rad > 1e-6:
+        yaw_step = min(max(math.radians(6), yaw_rad / 6.0), math.radians(10))
     best = (x, y, yaw)
-    best_s = prior if prior is not None else -1e9
-    for dx in _frange(-xy_m, xy_m, 0.04):
-        for dy in _frange(-xy_m, xy_m, 0.04):
-            for dth in _frange(-yaw_rad, yaw_rad, 0.08):
+    best_s = score_pose(grid, x, y, yaw, ds)
+    if best_s is None:
+        best_s = -1e9
+    for dx in _frange(-xy_m, xy_m, xy_step):
+        for dy in _frange(-xy_m, xy_m, xy_step):
+            for dth in _frange(-yaw_rad, yaw_rad, yaw_step):
                 s = score_pose(grid, x + dx, y + dy, yaw + dth, ds)
                 if s is not None and s > best_s:
                     best_s = s
                     best = (x + dx, y + dy, yaw + dth)
+    fx, fy, fyaw = best
+    ds2 = downsample_scan(points, buckets=72)
+    for dx in _frange(-0.08, 0.08, 0.03):
+        for dy in _frange(-0.08, 0.08, 0.03):
+            for dth in _frange(-math.radians(8), math.radians(8), math.radians(2)):
+                s = score_pose(grid, fx + dx, fy + dy, fyaw + dth, ds2)
+                if s is not None and s > best_s:
+                    best_s = s
+                    best = (fx + dx, fy + dy, fyaw + dth)
     if best_s < MIN_LOCAL_SCORE:
         return None
-    if prior is not None and best_s < prior + 0.01:
-        return None
     return Match(best[0], best[1], best[2], best_s)
+
+
+def match_local(grid, x, y, yaw, points, xy_m=0.10, yaw_rad=0.38):
+    return match_scan(grid, x, y, yaw, points, xy_m=xy_m, yaw_rad=yaw_rad)
+
+
+def match_yaw(grid, x, y, points):
+    """xy는 고정하고 yaw만 한 바퀴 본다. 주행 중 로컬 매칭 실패용."""
+    if grid.occ_n < MIN_OCC:
+        return None
+    ds = downsample_scan(points, buckets=48)
+    if len(ds) < MIN_HITS:
+        return None
+    best_yaw = None
+    best_s = -1e9
+    for yaw in _frange(0.0, 2 * math.pi - 0.01, math.radians(8)):
+        s = score_pose(grid, x, y, yaw, ds)
+        if s is not None and s > best_s:
+            best_s = s
+            best_yaw = yaw
+    if best_yaw is None:
+        return None
+    ds2 = downsample_scan(points, buckets=72)
+    for dth in _frange(-math.radians(10), math.radians(10), math.radians(2)):
+        s = score_pose(grid, x, y, best_yaw + dth, ds2)
+        if s is not None and s > best_s:
+            best_s = s
+            best_yaw = best_yaw + dth
+    if best_s < MIN_HEADING_SCORE:
+        return None
+    return Match(x, y, best_yaw, best_s)
 
 
 def match_heading(grid, x, y, points, xy_m=0.35):

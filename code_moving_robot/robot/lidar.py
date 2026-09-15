@@ -9,6 +9,8 @@ import time
 
 import ydlidar
 
+from robot.pins import LIDAR_ANGLE_SIGN
+
 PORT = "/dev/ttyUSB0"
 BAUD = 128000
 SCAN_HZ = 7.0
@@ -69,10 +71,9 @@ class Lidar:
         laser.setlidaropt(ydlidar.LidarPropSingleChannel, True)
         # False: start=DTR low(회전), stop=DTR high(정지). X4 Pro M_CTR 극성에 맞춤
         laser.setlidaropt(ydlidar.LidarPropSupportMotorDtrCtrl, False)
-        # 기본 각은 시계 방향. 오도메트리는 반시계(+yaw)라 맞추지 않으면
-        # 돌 때마다 벽이 원형으로 번진다.
+        # 각 부호는 read()에서 LIDAR_ANGLE_SIGN으로 맞춘다. SDK bool은 무시될 수 있음.
         if hasattr(ydlidar, "LidarPropInverted"):
-            laser.setlidaropt(ydlidar.LidarPropInverted, True)
+            laser.setlidaropt(ydlidar.LidarPropInverted, False)
         if hasattr(ydlidar, "LidarPropReversion"):
             laser.setlidaropt(ydlidar.LidarPropReversion, False)
         return laser
@@ -128,7 +129,7 @@ class Lidar:
         points = []
         for p in scan.points:
             if p.range > 0:
-                points.append((p.angle, p.range))
+                points.append((LIDAR_ANGLE_SIGN * p.angle, p.range))
         return points
 
     def __enter__(self):
