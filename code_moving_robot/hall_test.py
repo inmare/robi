@@ -6,7 +6,7 @@ from gpiozero import DigitalInputDevice
 # 왼쪽 DO = GPIO16 (물리 36), 오른쪽 DO = GPIO5 (물리 29)
 LEFT_DO = 16
 RIGHT_DO = 5
-MAGNETS = 8
+MAGNETS = 4
 
 # 자석이 가까우면 DO가 LOW. pull_up 이라 is_active 가 True 면 자석 있음
 left = DigitalInputDevice(LEFT_DO, pull_up=True, bounce_time=0.002)

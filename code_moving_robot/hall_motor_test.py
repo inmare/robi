@@ -1,21 +1,33 @@
-"""한쪽 바퀴를 느리게 돌리며 A3144E 홀 센서를 확인. 핀은 learn/pin map.md."""
+"""홀 카운트로 1m 직진 시험. 핀은 실제 좌우에 맞춤."""
 
+import math
 import time
 from gpiozero import DigitalInputDevice, DigitalOutputDevice, PWMOutputDevice
 
-# 왼쪽 DO = GPIO16 (물리 36), 오른쪽 DO = GPIO5 (물리 29)
-LEFT_DO = 16
-RIGHT_DO = 5
-MAGNETS = 8
+# 시험: 예전 왼쪽 GPIO가 실제 오른쪽 바퀴라서 좌우를 바꿈
+LEFT_DO = 5
+RIGHT_DO = 16
+MAGNETS = 4
+WHEEL_D = 0.066
+# 자석은 타이어 바깥에서 5~7mm 안쪽. 홀이 세는 건 바퀴 회전 횟수라
+# 1m 이동은 자석 원 지름이 아니라 바닥과 닿는 타이어 지름으로 계산함
+MAGNET_INSET = 0.006
+MAGNET_CIRCLE_D = WHEEL_D - 2 * MAGNET_INSET
+TARGET_M = 1.0
+PULSE_M = math.pi * WHEEL_D / MAGNETS
+TARGET_PULSES = TARGET_M / PULSE_M
 
 LEFT_INVERT = False
 RIGHT_INVERT = False
-SPEED = 0.15
+BASE_SPEED = 0.25
+KP = 0.06
+MIN_SPEED = 0.12
+MAX_SPEED = 0.4
 PWM_HZ = 1000
+MAX_PULSE_DIFF = MAGNETS * 2
 
-# 실제 배선이 좌우 반대라, 문서 원래 계획과 GPIO를 바꿈
-LEFT_RPWM, LEFT_LPWM, LEFT_REN, LEFT_LEN = 18, 19, 27, 21
-RIGHT_RPWM, RIGHT_LPWM, RIGHT_REN, RIGHT_LEN = 12, 13, 17, 4
+LEFT_RPWM, LEFT_LPWM, LEFT_REN, LEFT_LEN = 12, 13, 17, 4
+RIGHT_RPWM, RIGHT_LPWM, RIGHT_REN, RIGHT_LEN = 18, 19, 27, 21
 
 
 class Wheel:
@@ -64,13 +76,23 @@ right_count = 0
 def on_left():
     global left_count
     left_count += 1
-    print(f"왼  펄스 {left_count:4d}  ({left_count / MAGNETS:.2f} 바퀴)")
 
 
 def on_right():
     global right_count
     right_count += 1
-    print(f"오른 펄스 {right_count:4d}  ({right_count / MAGNETS:.2f} 바퀴)")
+
+
+def clamp(speed):
+    if speed < MIN_SPEED:
+        return MIN_SPEED
+    if speed > MAX_SPEED:
+        return MAX_SPEED
+    return speed
+
+
+def meters(count):
+    return count * PULSE_M
 
 
 def main():
@@ -80,43 +102,59 @@ def main():
     left_hall.when_activated = on_left
     right_hall.when_activated = on_right
 
-    print("로봇을 들어 두거나 바퀴가 헛돌게 하세요.")
-    print("모터 6V 스위치는 이 프로그램이 뜬 뒤에 켜세요.")
-    print("한쪽만 느리게 돌리고, 그 바퀴 홀 센서 펄스가 올라가야 정상입니다.")
-    side = input("어느 쪽? l 왼쪽 / r 오른쪽 [l]: ").strip().lower()
-    if side != "r":
-        side = "l"
-    side_name = "왼쪽" if side == "l" else "오른쪽"
-    input(f"{side_name}만 속도 {SPEED:.2f} 로 돕니다. 준비되면 Enter...")
-
-    moving = left_wheel if side == "l" else right_wheel
-    idle = right_wheel if side == "l" else left_wheel
-    moving.enable()
-    idle.disable()
-    moving.drive(SPEED)
     print(
-        f"{side_name} 회전 시작. Ctrl+C 종료. "
-        f"지금 왼={'자석' if left_hall.is_active else '없음'}, "
-        f"오른={'자석' if right_hall.is_active else '없음'}"
+        f"자석 {MAGNETS}개, 타이어 {WHEEL_D * 1000:.0f}mm, "
+        f"자석은 테두리에서 {MAGNET_INSET * 1000:.0f}mm 안쪽 "
+        f"(자석 원 {MAGNET_CIRCLE_D * 1000:.0f}mm)"
     )
+    print(f"목표 {TARGET_M:.2f}m = 펄스 {TARGET_PULSES:.1f}개 (타이어 둘레 기준)")
+    print("바닥에 두고 1m 직선 공간이 있는지 보세요.")
+    print("모터 6V는 이 프로그램이 뜬 뒤에 켜세요. Ctrl+C 즉시 정지")
+    input("준비되면 Enter...")
 
-    last_l = left_hall.is_active
-    last_r = right_hall.is_active
+    left_wheel.enable()
+    right_wheel.enable()
+    left_wheel.drive(BASE_SPEED)
+    right_wheel.drive(BASE_SPEED)
+    print("직진 시작")
+
+    last_print = 0.0
+    reason = "중지"
     try:
         while True:
-            if left_hall.is_active != last_l:
-                last_l = left_hall.is_active
-                print(f"왼  {'감지' if last_l else '해제'}")
-            if right_hall.is_active != last_r:
-                last_r = right_hall.is_active
-                print(f"오른 {'감지' if last_r else '해제'}")
+            error = left_count - right_count
+            if abs(error) > MAX_PULSE_DIFF:
+                reason = "좌우 펄스 차이가 커서 정지"
+                break
+
+            avg = (left_count + right_count) / 2
+            if avg >= TARGET_PULSES:
+                reason = "1m 도달"
+                break
+
+            left_speed = clamp(BASE_SPEED - KP * error)
+            right_speed = clamp(BASE_SPEED + KP * error)
+            left_wheel.drive(left_speed)
+            right_wheel.drive(right_speed)
+
+            now = time.monotonic()
+            if now - last_print >= 0.3:
+                last_print = now
+                print(
+                    f"왼 {left_count:3d} {meters(left_count):.2f}m {left_speed:.2f} | "
+                    f"오른 {right_count:3d} {meters(right_count):.2f}m {right_speed:.2f}"
+                )
             time.sleep(0.02)
     except KeyboardInterrupt:
-        pass
+        reason = "Ctrl+C"
     finally:
-        moving.disable()
-        idle.disable()
-        print(f"EN OFF. 왼 {left_count}회, 오른 {right_count}회")
+        left_wheel.disable()
+        right_wheel.disable()
+        print(
+            f"EN OFF. {reason}. "
+            f"왼 {left_count}회 {meters(left_count):.2f}m, "
+            f"오른 {right_count}회 {meters(right_count):.2f}m"
+        )
 
 
 if __name__ == "__main__":
