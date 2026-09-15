@@ -10,7 +10,7 @@ RIGHT_INVERT = False
 SPEED = 0.3  # 0.0 ~ 1.0. 처음엔 낮게
 PWM_HZ = 1000
 
-# 실제 배선이 좌우 반대라, 문서 원래 계획과 GPIO를 바꿈
+# 핀은 learn/pin map.md. 왼쪽 GPIO18/19/27/21, 오른쪽 GPIO12/13/17/4
 LEFT_RPWM, LEFT_LPWM, LEFT_REN, LEFT_LEN = 18, 19, 27, 21
 RIGHT_RPWM, RIGHT_LPWM, RIGHT_REN, RIGHT_LEN = 12, 13, 17, 4
 

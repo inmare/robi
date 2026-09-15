@@ -1,10 +1,10 @@
-"""홀 카운트로 1m 직진 시험. 핀은 실제 좌우에 맞춤."""
+"""홀 카운트로 1m 직진 시험. 핀은 learn/pin map.md."""
 
 import math
 import time
 from gpiozero import DigitalInputDevice, DigitalOutputDevice, PWMOutputDevice
 
-# 시험: 예전 왼쪽 GPIO가 실제 오른쪽 바퀴라서 좌우를 바꿈
+# 왼쪽 DO = GPIO5 (물리 29), 오른쪽 DO = GPIO16 (물리 36)
 LEFT_DO = 5
 RIGHT_DO = 16
 MAGNETS = 4
@@ -26,8 +26,8 @@ MAX_SPEED = 0.4
 PWM_HZ = 1000
 MAX_PULSE_DIFF = MAGNETS * 2
 
-LEFT_RPWM, LEFT_LPWM, LEFT_REN, LEFT_LEN = 12, 13, 17, 4
-RIGHT_RPWM, RIGHT_LPWM, RIGHT_REN, RIGHT_LEN = 18, 19, 27, 21
+LEFT_RPWM, LEFT_LPWM, LEFT_REN, LEFT_LEN = 18, 19, 27, 21
+RIGHT_RPWM, RIGHT_LPWM, RIGHT_REN, RIGHT_LEN = 12, 13, 17, 4
 
 
 class Wheel:

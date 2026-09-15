@@ -3,9 +3,9 @@
 import time
 from gpiozero import DigitalInputDevice
 
-# 왼쪽 DO = GPIO16 (물리 36), 오른쪽 DO = GPIO5 (물리 29)
-LEFT_DO = 16
-RIGHT_DO = 5
+# 왼쪽 DO = GPIO5 (물리 29), 오른쪽 DO = GPIO16 (물리 36)
+LEFT_DO = 5
+RIGHT_DO = 16
 MAGNETS = 4
 
 # 자석이 가까우면 DO가 LOW. pull_up 이라 is_active 가 True 면 자석 있음
