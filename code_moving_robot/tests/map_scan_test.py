@@ -35,11 +35,18 @@ def main():
             print(f"{used}/{SCANS}  점 {len(points)}")
         path = grid.save_pgm(OUT)
         print("저장:", path)
+        print()
+        print(grid.render_ascii())
+        print()
+        print("SSH에서는 위 그림이 지도다. #=벽  .=빈 공간  R=로봇")
+        print("PGM은 화면이 있는 PC로 복사해야 이미지로 보인다.")
     except KeyboardInterrupt:
         print("Ctrl+C")
         if used:
             path = grid.save_pgm(OUT)
             print("중간 저장:", path)
+            print()
+            print(grid.render_ascii())
     finally:
         lidar.close()
         print("라이다 모터 OFF")

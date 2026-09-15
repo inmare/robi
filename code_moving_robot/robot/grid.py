@@ -98,3 +98,40 @@ class OccupancyGrid:
                 body[row * n + col] = pix
         path.write_bytes(header + body)
         return path
+
+    def render_ascii(self, cols=72, rows=36):
+        """SSH 터미널용. #=벽  .=빈 공간  공백=미지  R=원점."""
+        n = self.n
+        origin = self.world_to_cell(0.0, 0.0)
+        lines = []
+        for out_r in range(rows):
+            src_r0 = int((rows - 1 - out_r) * n / rows)
+            src_r1 = int((rows - out_r) * n / rows)
+            row_chars = []
+            for out_c in range(cols):
+                src_c0 = int(out_c * n / cols)
+                src_c1 = int((out_c + 1) * n / cols)
+                occupied = False
+                free = False
+                for sr in range(src_r0, max(src_r1, src_r0 + 1)):
+                    for sc in range(src_c0, max(src_c1, src_c0 + 1)):
+                        if sr >= n or sc >= n:
+                            continue
+                        lo = self.log_odds[sr][sc]
+                        if lo > 0.5:
+                            occupied = True
+                        elif lo < -0.5:
+                            free = True
+                if origin is not None:
+                    orow, ocol = origin
+                    if src_r0 <= orow < src_r1 and src_c0 <= ocol < src_c1:
+                        row_chars.append("R")
+                        continue
+                if occupied:
+                    row_chars.append("#")
+                elif free:
+                    row_chars.append(".")
+                else:
+                    row_chars.append(" ")
+            lines.append("".join(row_chars))
+        return "\n".join(lines)

@@ -1,12 +1,33 @@
-"""YDLIDAR X4 Pro. 쓸 때만 모터를 켜고, 안 쓰면 turnOff 한다."""
+"""YDLIDAR X4 Pro. 모터는 시리얼 DTR로 켜고 끈다."""
 
 import atexit
+import fcntl
+import os
+import struct
+import time
+
 import ydlidar
 
 PORT = "/dev/ttyUSB0"
 BAUD = 128000
 SCAN_HZ = 7.0
 SAMPLE_RATE = 5
+
+# linux/termios.h — USB-시리얼이 포트를 닫아도 DTR이 남아 있으면 모터가 계속 돈다
+TIOCMBIC = 0x5417
+TIOCM_DTR = 0x002
+TIOCM_RTS = 0x004
+
+
+def force_motor_off(port=PORT):
+    """SDK 없이 DTR을 내려 모터를 끈다. 프로그램이 깨진 뒤에도 이걸 쓴다."""
+    fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+    try:
+        bits = struct.pack("I", TIOCM_DTR | TIOCM_RTS)
+        fcntl.ioctl(fd, TIOCMBIC, bits)
+        time.sleep(0.4)
+    finally:
+        os.close(fd)
 
 
 class Lidar:
@@ -28,6 +49,8 @@ class Lidar:
         laser.setlidaropt(ydlidar.LidarPropScanFrequency, SCAN_HZ)
         laser.setlidaropt(ydlidar.LidarPropSampleRate, SAMPLE_RATE)
         laser.setlidaropt(ydlidar.LidarPropSingleChannel, True)
+        # X4/X4 Pro: DTR=1 시작, DTR=0 정지. 이게 False면 turnOff가 모터를 켜 둔다
+        laser.setlidaropt(ydlidar.LidarPropSupportMotorDtrCtrl, True)
         return laser
 
     def start(self):
@@ -53,9 +76,10 @@ class Lidar:
         self._motor = True
 
     def stop(self):
-        """스캔 모터만 끈다. USB는 꽂아 둬도 된다. 다시 start() 하면 재개."""
+        """스캔 모터만 끈다. USB는 꽂아 둔 채 다시 start() 가능."""
         if self._motor and self.laser is not None:
             self.laser.turnOff()
+            time.sleep(0.5)
         self._motor = False
 
     def close(self):
@@ -65,6 +89,10 @@ class Lidar:
             self.laser.disconnecting()
         self.laser = None
         self._open = False
+        try:
+            force_motor_off(self.port)
+        except OSError:
+            pass
 
     def read(self):
         """한 바퀴. 실패면 None. 성공이면 [(angle_rad, range_m), ...]."""

@@ -17,7 +17,8 @@ code_moving_robot/
     hall_test.py
     hall_motor_test.py
     lidar_test.py        전방 거리. 종료 시 모터 OFF
-    map_scan_test.py     제자리 스캔 → maps/last_scan.pgm
+    lidar_stop.py        스캔 없이 DTR만 내려 모터 정지
+    map_scan_test.py     제자리 스캔 → 터미널 ASCII + maps/last_scan.pgm
   maps/                  저장한 격자. git에 올리지 않음
   lidar_build_script.sh  이 폴더에 SDK 클론 + .venv 에 바인딩
   .venv/                 uv 환경. 홈의 ydlidar-venv 를 쓰지 않음
@@ -33,24 +34,45 @@ code_moving_robot/
 cd code_moving_robot
 .venv/bin/python tests/lidar_test.py
 .venv/bin/python tests/map_scan_test.py
+.venv/bin/python tests/lidar_stop.py
 ```
 
 ## 라이다 모터
 
-USB만 꽂혀 있고 `start()`를 안 했으면 보통 안 돈다.  
-`start()` → `turnOn()` 이 모터를 돌린다. 평소에 안 쓸 때는 `stop()` 또는 `close()`를 호출한다.
+X4 Pro 모터는 USB 전원이 아니라 **시리얼 DTR**으로 돌고 멈춘다.  
+어댑터 보드가 DTR을 모터 제어에 쓴다. 포트를 열면 리눅스가 DTR을 올려서 모터가 켜지고, 프로그램이 꺼져도 DTR이 남아 있으면 계속 돈다.
+
+`robot/lidar.py`는 `LidarPropSupportMotorDtrCtrl = True` 로 `turnOff()`가 DTR을 내리게 하고, 포트 닫은 뒤 `force_motor_off()`로 한 번 더 내린다.
 
 | 메서드 | 동작 |
 |---|---|
-| `start()` | 포트 열고 모터 ON |
-| `stop()` | 모터만 OFF. USB는 꽂아 둔 채 다시 `start()` 가능 |
-| `close()` | 모터 OFF + 포트 해제. 프로그램 종료 때 |
+| `start()` | 포트 열고 DTR 올려 모터 ON |
+| `stop()` | `turnOff()`로 DTR 내려 모터 OFF |
+| `close()` | 모터 OFF + 포트 해제 + DTR 재확인 |
+| `force_motor_off()` | SDK 없이 DTR만 내림 |
 | `with Lidar() as lidar:` | 들어가면 start, 나오면 close |
 
-시험 스크립트는 `try/finally`와 `atexit`로 Ctrl+C·예외에도 `close()` 한다.  
-예전처럼 루프만 돌리다가 프로세스가 죽으면 모터가 남을 수 있다. 그때는 스크립트를 한 번 더 실행했다가 바로 끝내거나, USB를 뺐다 꽂는다.
+이미 돌아가고 있으면:
 
-지도 프로그램도 스캔이 끝나면 바로 `close()` 한다. 백그라운드에 라이다를 켜 두지 않는다.
+```bash
+.venv/bin/python tests/lidar_stop.py
+```
+
+그래도 안 멈추면 USB를 뺐다 꽂는다.
+
+## SSH에서 지도 보기
+
+SSH 셸만으로는 PGM/PNG 창이 안 뜬다. X11 포워딩도 윈도우에서 거의 안 쓴다.
+
+`tests/map_scan_test.py`는 끝나면 터미널에 ASCII 지도를 찍는다. `#` 벽, `.` 빈 공간, `R` 로봇. SSH에서 보는 그림은 이것이다.
+
+`maps/last_scan.pgm`은 나중에 PC로 가져가 이미지로 연다.
+
+```bash
+scp pi@라즈베리주소:code_moving_robot/maps/last_scan.pgm .
+```
+
+Cursor/VS Code Remote SSH로 파이 폴더를 열고 있으면 그 PGM을 에디터에서 열 수도 있다. 순수 셸만 있으면 ASCII가 맞다.
 
 ## 목표 (현재 계획)
 
@@ -199,7 +221,7 @@ uv pip install --python .venv/bin/python numpy matplotlib paho-mqtt gpiozero
 `초기화 실패`면 포트·baud·`dialout`·다른 프로세스가 `/dev/ttyUSB0`을 잡고 있는지 본다.  
 `import ydlidar` 실패면 빌드 스크립트를 다시 하고, 실행이 시스템 `python3`가 아니라 `.venv/bin/python`인지 확인한다.
 
-`maps/last_scan.pgm` 은 이미지 뷰어로 연다. 검정=벽, 흰=빈 공간, 회색=미지. 기울여 찍은 결과는 윤곽 확인용이다.
+`maps/last_scan.pgm` 은 PC로 복사해 이미지 뷰어로 연다. SSH만 있으면 `map_scan_test.py`가 찍는 ASCII(`#` 벽, `.` 빈 공간)를 본다. 기울여 찍은 결과는 윤곽 확인용이다.
 
 ## 다른 AI를 위한 작업 규칙
 
