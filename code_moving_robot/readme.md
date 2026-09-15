@@ -17,7 +17,7 @@ code_moving_robot/
     hall_test.py
     hall_motor_test.py
     lidar_test.py        전방 거리. 종료 시 모터 OFF
-    lidar_stop.py        스캔 없이 DTR만 내려 모터 정지
+    lidar_stop.py        스캔 없이 DTR을 올려 모터 정지 시도
     map_scan_test.py     제자리 스캔 → 터미널 ASCII + maps/last_scan.pgm
   maps/                  저장한 격자. git에 올리지 않음
   lidar_build_script.sh  이 폴더에 SDK 클론 + .venv 에 바인딩
@@ -39,17 +39,21 @@ cd code_moving_robot
 
 ## 라이다 모터
 
-X4 Pro 모터는 USB 전원이 아니라 **시리얼 DTR**으로 돌고 멈춘다.  
-어댑터 보드가 DTR을 모터 제어에 쓴다. 포트를 열면 리눅스가 DTR을 올려서 모터가 켜지고, 프로그램이 꺼져도 DTR이 남아 있으면 계속 돈다.
+X4 Pro 모터는 USB 전원이 아니라 시리얼 **DTR → M_CTR**으로 속도를 바꾼다.  
+포트를 닫을 때 DTR이 0V로 떨어지면 데이터시트상 **최고속**이 된다.
 
-`robot/lidar.py`는 `LidarPropSupportMotorDtrCtrl = True` 로 `turnOff()`가 DTR을 내리게 하고, 포트 닫은 뒤 `force_motor_off()`로 한 번 더 내린다.
+X4 Pro 모터핀 `M_CTR`은 전압이 **낮을수록 빠르고, 0V가 최고속**이다.  
+그래서 DTR을 내리면 정지가 아니라 최고속이 된다. 예전 `stop`/`lidar_stop.py`가 그렇게 동작했다.
+
+지금은 `LidarPropSupportMotorDtrCtrl = False` 로 `turnOff()`가 DTR을 **올린다**.  
+포트를 닫을 때 리눅스 `HUPCL`이 DTR을 다시 내리면 또 최고속이 되므로, 닫기 전에 `HUPCL`을 끈다.
 
 | 메서드 | 동작 |
 |---|---|
-| `start()` | 포트 열고 DTR 올려 모터 ON |
-| `stop()` | `turnOff()`로 DTR 내려 모터 OFF |
-| `close()` | 모터 OFF + 포트 해제 + DTR 재확인 |
-| `force_motor_off()` | SDK 없이 DTR만 내림 |
+| `start()` | DTR low, 모터 회전 |
+| `stop()` | `turnOff()`가 DTR high |
+| `close()` | 정지 후 포트 해제. HUPCL 끄고 DTR을 올린 채 닫음 |
+| `force_motor_off()` | SDK 없이 DTR high + HUPCL off |
 | `with Lidar() as lidar:` | 들어가면 start, 나오면 close |
 
 이미 돌아가고 있으면:

@@ -1,9 +1,10 @@
 """YDLIDAR X4 Pro. 모터는 시리얼 DTR로 켜고 끈다."""
 
 import atexit
+import array
 import fcntl
 import os
-import struct
+import termios
 import time
 
 import ydlidar
@@ -13,19 +14,36 @@ BAUD = 128000
 SCAN_HZ = 7.0
 SAMPLE_RATE = 5
 
-# linux/termios.h — USB-시리얼이 포트를 닫아도 DTR이 남아 있으면 모터가 계속 돈다
-TIOCMBIC = 0x5417
+# linux/ioctl.h
+TIOCMBIS = 0x5416  # 비트 켜기
+TIOCMBIC = 0x5417  # 비트 끄기
 TIOCM_DTR = 0x002
 TIOCM_RTS = 0x004
 
+# X4 Pro 데이터시트: M_CTR 전압이 낮을수록 빠름. 0V = 최고속.
+# 공식 어댑터는 DTR로 정지(despin)한다.
+# SDK SupportMotorDtrCtrl True  → turnOff가 DTR을 내림 → 최고속 (지금 증상)
+# False → turnOff가 DTR을 올림 → 정지
+DTR_HIGH_STOPS_MOTOR = True
+
+
+def _ioctl_bits(fd, op, mask):
+    buf = array.array("I", [mask])
+    fcntl.ioctl(fd, op, buf)
+
 
 def force_motor_off(port=PORT):
-    """SDK 없이 DTR을 내려 모터를 끈다. 프로그램이 깨진 뒤에도 이걸 쓴다."""
+    """DTR을 올린 채 포트를 닫는다. HUPCL을 끄지 않으면 닫을 때 DTR이 내려가 다시 최고속이 된다."""
     fd = os.open(port, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
     try:
-        bits = struct.pack("I", TIOCM_DTR | TIOCM_RTS)
-        fcntl.ioctl(fd, TIOCMBIC, bits)
-        time.sleep(0.4)
+        attrs = termios.tcgetattr(fd)
+        attrs[2] &= ~termios.HUPCL
+        termios.tcsetattr(fd, termios.TCSANOW, attrs)
+        if DTR_HIGH_STOPS_MOTOR:
+            _ioctl_bits(fd, TIOCMBIS, TIOCM_DTR)
+        else:
+            _ioctl_bits(fd, TIOCMBIC, TIOCM_DTR)
+        time.sleep(0.5)
     finally:
         os.close(fd)
 
@@ -49,8 +67,8 @@ class Lidar:
         laser.setlidaropt(ydlidar.LidarPropScanFrequency, SCAN_HZ)
         laser.setlidaropt(ydlidar.LidarPropSampleRate, SAMPLE_RATE)
         laser.setlidaropt(ydlidar.LidarPropSingleChannel, True)
-        # X4/X4 Pro: DTR=1 시작, DTR=0 정지. 이게 False면 turnOff가 모터를 켜 둔다
-        laser.setlidaropt(ydlidar.LidarPropSupportMotorDtrCtrl, True)
+        # False: start=DTR low(회전), stop=DTR high(정지). X4 Pro M_CTR 극성에 맞춤
+        laser.setlidaropt(ydlidar.LidarPropSupportMotorDtrCtrl, False)
         return laser
 
     def start(self):
