@@ -26,6 +26,7 @@ code_moving_robot/
   tests/
     motor_test.py, hall_test.py, hall_motor_test.py
     lidar_test.py, lidar_stop.py, map_scan_test.py
+  route/
     route_run.py   지도 작성 + 경로 주행
   maps/            pgm·json. git에 안 올림
   lidar_build_script.sh
@@ -37,7 +38,7 @@ code_moving_robot/
 ```bash
 cd code_moving_robot
 uv pip install --python .venv/bin/python gpiozero
-.venv/bin/python tests/route_run.py
+.venv/bin/python route/route_run.py
 ```
 
 `gpiozero`가 venv에 없으면 홀·모터가 안 열린다. 라이다만 쓸 때는 SDK만 있어도 된다.
@@ -91,7 +92,7 @@ ROS 1/2, Nav2, slam_toolbox, RViz, `ydlidar_ros2_driver`.
 ## 다른 AI
 
 - 사용자가 파일 작성을 명시하기 전에는 코드 대신 역할만 설명한다
-- 로직은 `robot/`, 시험·조작 엔트리는 `tests/`
+- 로직은 `robot/`, 경로 작업 엔트리는 `route/`, 시험은 `tests/`
 - 라이다는 `finally`/`with`로 `close()`
 - 핀은 `learn/pin map.md`와 `robot/pins.py`. 추측하지 않음
 - 기울인 라이다 지도를 최종 경로 맵으로 쓰지 않음

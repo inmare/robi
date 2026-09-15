@@ -1,6 +1,6 @@
 # 지도 작성 후 경로 이동
 
-엔트리: `code_moving_robot/tests/route_run.py`  
+엔트리: `code_moving_robot/route/route_run.py`  
 스택: `docs/moving_stack.md`
 
 로봇을 **직접 천천히 몰면서** 지도를 쌓고, 그 자리에서 시작·경유·도착을 찍은 다음 `r`로 따라가게 한다. ROS/Nav2 없음.
@@ -22,7 +22,7 @@ uv pip install --python .venv/bin/python gpiozero
 
 ```bash
 cd code_moving_robot
-.venv/bin/python tests/route_run.py
+.venv/bin/python route/route_run.py
 ```
 
 글이 나온 뒤 Enter, **그다음** 모터 6V를 켠다. SSH면 터미널이 포커스를 가진 채 키를 누른다. Enter를 칠 필요 없다.

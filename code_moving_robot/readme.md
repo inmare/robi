@@ -20,7 +20,7 @@ cd code_moving_robot
 .venv/bin/python tests/lidar_test.py
 .venv/bin/python tests/lidar_stop.py
 .venv/bin/python tests/map_scan_test.py
-.venv/bin/python tests/route_run.py
+.venv/bin/python route/route_run.py
 ```
 
 `route_run.py` 키와 순서는 `docs/route.md` 만 본다.

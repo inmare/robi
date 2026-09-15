@@ -218,10 +218,10 @@ def main():
             elif ch == " ":
                 drive.stop(odo)
             elif ch == "+":
-                speed = min(0.4, speed + 0.04)
+                speed = min(0.92, speed + 0.04)
                 print(f"속도 {speed:.2f}")
             elif ch == "-":
-                speed = max(0.12, speed - 0.04)
+                speed = max(0.42, speed - 0.04)
                 print(f"속도 {speed:.2f}")
             elif ch == "1":
                 start = pose_tuple(odo)
