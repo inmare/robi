@@ -13,7 +13,7 @@ WHEEL_D = 0.066
 # 1m 이동은 자석 원 지름이 아니라 바닥과 닿는 타이어 지름으로 계산함
 MAGNET_INSET = 0.006
 MAGNET_CIRCLE_D = WHEEL_D - 2 * MAGNET_INSET
-TARGET_M = 1.0
+TARGET_M = 3.0
 PULSE_M = math.pi * WHEEL_D / MAGNETS
 TARGET_PULSES = TARGET_M / PULSE_M
 
