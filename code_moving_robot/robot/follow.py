@@ -19,6 +19,26 @@ class Follower:
             return None
         return self.points[self.i]
 
+    def remaining_points(self):
+        return self.points[self.i :]
+
+    def remaining_m(self, odo):
+        if self.done():
+            return 0.0
+        acc = math.hypot(self.points[self.i][0] - odo.x, self.points[self.i][1] - odo.y)
+        for j in range(self.i, len(self.points) - 1):
+            x0, y0 = self.points[j][0], self.points[j][1]
+            x1, y1 = self.points[j + 1][0], self.points[j + 1][1]
+            acc += math.hypot(x1 - x0, y1 - y0)
+        return acc
+
+    def heading_err(self, odo):
+        cur = self.current()
+        if cur is None:
+            return 0.0
+        want = math.atan2(cur[1] - odo.y, cur[0] - odo.x)
+        return wrap_angle(want - odo.yaw)
+
     def step(self, drive, odo):
         if self.done():
             drive.stop(odo)

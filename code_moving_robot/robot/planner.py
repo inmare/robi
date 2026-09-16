@@ -6,7 +6,24 @@ import math
 from robot.pins import INFLATE_M
 
 
-def _inflate(grid, inflate_m):
+def _add_disk(blocked, grid, x, y, radius_m):
+    cell = grid.world_to_cell(x, y)
+    if cell is None:
+        return
+    r = max(1, int(math.ceil(radius_m / grid.resolution)))
+    row0, col0 = cell
+    r2 = r * r
+    n = grid.n
+    for di in range(-r, r + 1):
+        for dj in range(-r, r + 1):
+            if di * di + dj * dj > r2:
+                continue
+            rr, cc = row0 + di, col0 + dj
+            if 0 <= rr < n and 0 <= cc < n:
+                blocked.add((rr, cc))
+
+
+def _inflate(grid, inflate_m, extra_disks=None):
     r = max(1, int(math.ceil(inflate_m / grid.resolution)))
     n = grid.n
     blocked = set()
@@ -21,6 +38,10 @@ def _inflate(grid, inflate_m):
                     rr, cc = row + di, col + dj
                     if 0 <= rr < n and 0 <= cc < n:
                         blocked.add((rr, cc))
+    if extra_disks:
+        pad = max(inflate_m, 0.0)
+        for disk in extra_disks:
+            _add_disk(blocked, grid, disk[0], disk[1], disk[2] + pad)
     return blocked
 
 
@@ -35,13 +56,13 @@ def _clear_around(blocked, cell, n, radius_cells=6):
                 blocked.discard((rr, cc))
 
 
-def astar(grid, start_xy, goal_xy, inflate_m=INFLATE_M, free_only=False):
+def astar(grid, start_xy, goal_xy, inflate_m=INFLATE_M, free_only=False, extra_disks=None):
     """성공하면 월드 좌표 [(x,y), ...]. 실패하면 빈 리스트."""
     start = grid.world_to_cell(start_xy[0], start_xy[1])
     goal = grid.world_to_cell(goal_xy[0], goal_xy[1])
     if start is None or goal is None:
         return []
-    blocked = _inflate(grid, inflate_m)
+    blocked = _inflate(grid, inflate_m, extra_disks=extra_disks)
     _clear_around(blocked, start, grid.n)
     _clear_around(blocked, goal, grid.n)
     if goal in blocked:
@@ -87,11 +108,20 @@ def astar(grid, start_xy, goal_xy, inflate_m=INFLATE_M, free_only=False):
     return []
 
 
-def plan(grid, start_xy, goal_xy):
-    """부풀리기를 줄여가며 길을 찾는다. 미지 칸은 벽으로 보지 않는다."""
+def plan(grid, start_xy, goal_xy, extra_disks=None):
+    """부풀리기를 줄여가며 길을 찾는다. 미지 칸은 벽으로 보지 않는다.
+
+    extra_disks: 스캔에 안 잡힌 바닥 장애물 [(x, y, r), ...].
+    SLAM이 그 칸을 비워도 A*는 계속 피한다.
+    """
     for inflate_m in (INFLATE_M, 0.08, 0.0):
         path = astar(
-            grid, start_xy, goal_xy, inflate_m=inflate_m, free_only=False
+            grid,
+            start_xy,
+            goal_xy,
+            inflate_m=inflate_m,
+            free_only=False,
+            extra_disks=extra_disks,
         )
         if len(path) >= 2:
             return path
