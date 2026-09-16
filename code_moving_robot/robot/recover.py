@@ -42,6 +42,75 @@ def sector_min_range(points, center_rad, half_rad):
     return min(hits)
 
 
+def dist_point_seg(p, a, b):
+    ax, ay = a[0], a[1]
+    bx, by = b[0], b[1]
+    dx, dy = bx - ax, by - ay
+    l2 = dx * dx + dy * dy
+    if l2 < 1e-12:
+        return math.hypot(p[0] - ax, p[1] - ay)
+    t = max(0.0, min(1.0, ((p[0] - ax) * dx + (p[1] - ay) * dy) / l2))
+    return math.hypot(p[0] - (ax + t * dx), p[1] - (ay + t * dy))
+
+
+def dist_to_polyline(xy, points):
+    if not points:
+        return 1e9
+    best = math.hypot(xy[0] - points[0][0], xy[1] - points[0][1])
+    for i in range(len(points) - 1):
+        best = min(best, dist_point_seg(xy, points[i], points[i + 1]))
+    return best
+
+
+def hop_pose(x, y, yaw, side, turn_rad, hop_m):
+    tyaw = wrap_angle(yaw + side * turn_rad)
+    return (
+        x + hop_m * math.cos(tyaw),
+        y + hop_m * math.sin(tyaw),
+        tyaw,
+    )
+
+
+def side_clearance(points, side):
+    """90° 옆 + 실제 회전하는 앞옆(약 55°). 옆만 보면 앞옆 벽을 놓친다."""
+    half = math.radians(RECOVER_SECTOR_DEG)
+    side_c = sector_min_range(points, side * math.pi / 2, half)
+    front_c = sector_min_range(
+        points, side * math.radians(55), math.radians(38)
+    )
+    return min(side_c, front_c)
+
+
+def choose_detour(scan, x, y, yaw, rest, clear_m=RECOVER_CLEAR_M):
+    """남은 경로에 더 가까운 빈쪽. 더 넓은 빈 공간을 고르지 않는다.
+
+    다음 점만 보면 장애물 쪽을 가리키는 경우가 많아서, 우회 착지점이
+    남은 폴리라인에 얼마나 가까운지로 고른다. +1 왼, -1 오, 0 실패.
+    """
+    min_go = min(0.32, clear_m)
+    rest = list(rest or [])
+    left = side_clearance(scan, 1)
+    right = side_clearance(scan, -1)
+    best_side = 0
+    best_score = None
+    for side, cl in ((1, left), (-1, right)):
+        if cl < min_go:
+            continue
+        hx, hy, tyaw = hop_pose(x, y, yaw, side, RECOVER_TURN_RAD, RECOVER_SIDE_M)
+        if rest:
+            d_path = dist_to_polyline((hx, hy), rest)
+            want = math.atan2(rest[0][1] - hy, rest[0][0] - hx)
+            turn_after = abs(wrap_angle(want - tyaw))
+        else:
+            d_path = 0.0
+            turn_after = 0.0
+        score = d_path + 0.35 * turn_after - 0.08 * min(cl, 1.2)
+        if best_score is None or score < best_score:
+            best_score = score
+            best_side = side
+    return best_side, left, right
+
+
 def prefer_side(yaw, here, target):
     """목표점이 로봇 왼쪽이면 +1, 오른쪽이면 -1."""
     if target is None:
@@ -55,27 +124,13 @@ def prefer_side(yaw, here, target):
     return 0
 
 
-def pick_side(points, prefer=0, clear_m=RECOVER_CLEAR_M):
+def pick_side(points, prefer=0, clear_m=RECOVER_CLEAR_M, rest=None, pose=None):
     """+1 왼쪽, -1 오른쪽, 0 양쪽 막힘."""
-    half = math.radians(RECOVER_SECTOR_DEG)
-    left = sector_min_range(points, math.pi / 2, half)
-    right = sector_min_range(points, -math.pi / 2, half)
-    left_ok = left >= clear_m
-    right_ok = right >= clear_m
-    if left_ok and right_ok:
-        if prefer > 0:
-            return 1, left, right
-        if prefer < 0:
-            return -1, left, right
-        return (1 if left >= right else -1), left, right
-    if left_ok:
-        return 1, left, right
-    if right_ok:
-        return -1, left, right
-    tight = 0.35
-    if max(left, right) >= tight:
-        return (1 if left >= right else -1), left, right
-    return 0, left, right
+    x, y, yaw = (0.0, 0.0, 0.0) if pose is None else pose
+    rest = list(rest or [])
+    if not rest and prefer != 0:
+        rest = [(1.0, 0.45 * prefer)]
+    return choose_detour(points, x, y, yaw, rest, clear_m=clear_m)
 
 
 def skip_near(points, hit_xy, skip_m=0.40):
@@ -104,12 +159,25 @@ def thin_path(points, step_m=0.18):
     return out
 
 
+def seg_hits_disks(a, b, disks, pad=0.12):
+    for disk in disks or []:
+        if dist_point_seg((disk[0], disk[1]), a, b) < disk[2] + pad:
+            return True
+    return False
+
+
 def splice_path(grid, odo, rest, extra_disks):
-    """우회한 자리에서 남은 점으로. 먼저 A*, 실패하면 직선 이음."""
+    """우회한 자리에서 남은 점으로.
+
+    짧은 경로는 A*가 가상 장애물을 멀리 돌아 반대쪽으로 붙는 일이 있다.
+    직선이 디스크를 안 지나면 원래 점을 그대로 잇는다.
+    """
     rest = list(rest)
     if not rest:
         return []
     here = (odo.x, odo.y)
+    if not seg_hits_disks(here, rest[0], extra_disks):
+        return thin_path([here] + rest)
     chunk = plan(grid, here, rest[0], extra_disks=extra_disks)
     if len(chunk) < 2:
         chunk = [here, rest[0]]
@@ -128,6 +196,7 @@ class Recoverer:
         self._hop_from = (0.0, 0.0)
         self._target_yaw = 0.0
         self._target = None
+        self._rest = []
         self.log = None
 
     def active(self):
@@ -145,7 +214,7 @@ class Recoverer:
         self.state = "idle"
         self.log = None
 
-    def start(self, odo, reason, target=None):
+    def start(self, odo, reason, target=None, rest=None):
         self.state = "reverse"
         self.reason = reason
         self.tries += 1
@@ -153,6 +222,9 @@ class Recoverer:
         self._t0 = time.monotonic()
         self._stuck = (odo.x, odo.y, odo.yaw)
         self._target = target
+        self._rest = list(rest or [])
+        if target is not None and not self._rest:
+            self._rest = [target]
         hx = odo.x + HIT_AHEAD_M * math.cos(odo.yaw)
         hy = odo.y + HIT_AHEAD_M * math.sin(odo.yaw)
         self.disks.append((hx, hy, VIRTUAL_BLOCK_M))
@@ -208,9 +280,10 @@ class Recoverer:
     def _wait_lidar(self, drive, odo, scan, now):
         drive.stop(odo)
         if scan and len(scan) >= 12:
-            nxt = self._target
-            prefer = prefer_side(odo.yaw, (odo.x, odo.y), nxt)
-            side, left, right = pick_side(scan, prefer=prefer)
+            rest = skip_near(self._rest, self.hit_xy())
+            side, left, right = choose_detour(
+                scan, odo.x, odo.y, odo.yaw, rest
+            )
             if side == 0:
                 return self._fail(
                     drive,
@@ -219,11 +292,11 @@ class Recoverer:
                 )
             self.side = side
             name = "왼쪽" if side > 0 else "오른쪽"
-            self._target_yaw = wrap_angle(self._stuck[2] + side * RECOVER_TURN_RAD)
+            self._target_yaw = wrap_angle(odo.yaw + side * RECOVER_TURN_RAD)
             self.state = "turn"
             self._t0 = now
             self.log = (
-                f"{name} 우회  L={left:.2f}m R={right:.2f}m  "
+                f"{name} 우회(경로쪽)  L={left:.2f}m R={right:.2f}m  "
                 f"목표각 {math.degrees(self._target_yaw):.0f}°"
             )
             return None

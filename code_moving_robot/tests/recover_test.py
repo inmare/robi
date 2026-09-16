@@ -9,7 +9,7 @@ sys.path.insert(0, str(ROOT))
 
 from robot.grid import OccupancyGrid
 from robot.planner import plan
-from robot.recover import pick_side, skip_near, splice_path
+from robot.recover import choose_detour, pick_side, skip_near, splice_path
 
 
 class FakeOdo:
@@ -30,6 +30,31 @@ def test_pick_none_when_both_close():
     points = [(math.pi / 2, 0.15), (-math.pi / 2, 0.15)]
     side, _left, _right = pick_side(points)
     assert side == 0
+
+
+def test_choose_path_side_not_the_more_open_room():
+    """왼쪽이 더 넓어도 남은 경로가 오른쪽이면 오른쪽으로."""
+    scan = [
+        (math.pi / 2, 2.5),
+        (math.radians(55), 2.4),
+        (-math.pi / 2, 0.70),
+        (-math.radians(55), 0.72),
+    ]
+    rest = [(1.0, -0.25), (2.0, -0.45)]
+    side, left, right = choose_detour(scan, 0.0, 0.0, 0.0, rest)
+    assert side == -1, (side, left, right)
+
+
+def test_choose_path_side_left():
+    scan = [
+        (math.pi / 2, 0.70),
+        (math.radians(55), 0.72),
+        (-math.pi / 2, 2.5),
+        (-math.radians(55), 2.4),
+    ]
+    rest = [(1.0, 0.25), (2.0, 0.45)]
+    side, left, right = choose_detour(scan, 0.0, 0.0, 0.0, rest)
+    assert side == 1, (side, left, right)
 
 
 def test_skip_near_hit():
@@ -62,6 +87,8 @@ def test_splice_skips_hit():
 if __name__ == "__main__":
     test_pick_right_when_left_blocked()
     test_pick_none_when_both_close()
+    test_choose_path_side_not_the_more_open_room()
+    test_choose_path_side_left()
     test_skip_near_hit()
     test_plan_goes_around_virtual_disk()
     test_splice_skips_hit()

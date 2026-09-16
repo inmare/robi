@@ -496,8 +496,12 @@ def main():
                             follower = None
                             print(c_err(f"회복 {RECOVER_MAX}회 초과. 수동 ({trigger})"))
                         else:
-                            nxt = follower.current()
-                            recover.start(odo, trigger, target=nxt)
+                            recover.start(
+                                odo,
+                                trigger,
+                                target=follower.current(),
+                                rest=follower.remaining_points(),
+                            )
                             print(
                                 c_warn(
                                     f"회복 {recover.tries}/{RECOVER_MAX}: {recover.log}"
