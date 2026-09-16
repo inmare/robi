@@ -29,8 +29,7 @@ FRONT_STOP_DEG = 25.0
 ARRIVE_M = 0.15
 INFLATE_M = 0.16
 STALL_S = 3.0
-STALL_MOVE_M = 0.04
-STALL_YAW = 0.12
+STALL_MOVE_M = 0.10  # 경로 남은 거리가 이만큼 줄어야 움직임. 제자리 회전·SLAM 흔들림은 무시.
 
 # 바닥 장애물에 라이다가 걸리면 스캔이 끊긴다. 좁은 실내: 짧게 기억하고 더 빼서 돈다.
 LIDAR_STALL_S = 1.2
@@ -39,7 +38,7 @@ RECOVER_SIDE_M = 0.22
 RECOVER_TURN_RAD = 0.42
 RECOVER_CLEAR_M = 0.28
 RECOVER_SECTOR_DEG = 35.0
-RECOVER_MAX = 4
+RECOVER_MAX = 4  # 웨이포인트 하나당. 점을 지나면 횟수 리셋
 VIRTUAL_BLOCK_M = 0.22
 HIT_AHEAD_M = 0.14
 HIT_DEPTH_M = 0.45

@@ -33,7 +33,6 @@ from robot.pins import (
     RECOVER_MAX,
     STALL_MOVE_M,
     STALL_S,
-    STALL_YAW,
     TELEOP_SPEED,
     TRACK_M,
 )
@@ -149,24 +148,39 @@ def _xy_dist(a, b):
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
+def recorded_route(start, waypoints, goal):
+    seq = [start]
+    seq.extend(waypoints)
+    if goal is not None:
+        seq.append(goal)
+    return seq
+
+
+def route_number(xy, start, waypoints, goal):
+    """원래 기록 경로에서 지금 점 번호와 전체 개수. 1부터."""
+    seq = recorded_route(start, waypoints, goal)
+    n = len(seq)
+    if n == 0:
+        return 0, 0
+    i = min(range(n), key=lambda k: _xy_dist(xy, seq[k]))
+    return i + 1, n
+
+
 def remaining_targets(odo, start, waypoints, goal):
     """찍어 둔 점을 앞에서부터 따라간다. 지금 자리와 가장 가까운 점부터."""
     here = (odo.x, odo.y)
+    seq = recorded_route(start, waypoints, goal)
+    if not seq:
+        return []
     near_start = _xy_dist(here, start) <= 0.45
     near_goal = goal is not None and _xy_dist(here, goal) <= 0.45
     if near_goal and not near_start:
         if _xy_dist(here, start) > ARRIVE_M:
             return [start]
         return []
-
-    seq = [start]
-    seq.extend(waypoints)
-    if goal is not None:
-        seq.append(goal)
-    seq = [p for p in seq if _xy_dist(here, p) > ARRIVE_M]
-    if not seq:
-        return []
     nearest_i = min(range(len(seq)), key=lambda i: _xy_dist(here, seq[i]))
+    if _xy_dist(here, seq[nearest_i]) <= ARRIVE_M:
+        nearest_i += 1
     return seq[nearest_i:]
 
 
@@ -406,9 +420,39 @@ def localize_on_route(grid, scan, data):
             best_i = i
     if best is None:
         return None
-    n = len(samples)
-    name = f"경로 {best_i + 1}/{n}"
-    return name, best, best_i, n
+    orig = route_polyline(data)
+    sx, sy = samples[best_i][0], samples[best_i][1]
+    orig_i = min(
+        range(len(orig)),
+        key=lambda k: math.hypot(orig[k][0] - sx, orig[k][1] - sy),
+    )
+    n = len(orig)
+    name = f"경로 {orig_i + 1}/{n}"
+    return name, best, orig_i, n
+
+
+def snap_to_route(grid, odo, slam, scan, start, waypoints, goal):
+    """스캔을 저장 경로에 맞춰 오도메트리를 붙인다. 실패하면 None."""
+    if not scan:
+        return None
+    data_now = {"start": start, "waypoints": waypoints, "goal": goal}
+    picks = []
+    route_hit = None
+    if waypoints or goal:
+        route_hit = localize_on_route(grid, scan, data_now)
+        if route_hit is not None:
+            picks.append((route_hit[0], route_hit[1]))
+    local = match_heading(grid, odo.x, odo.y, scan, min_score=0.10)
+    if local is not None:
+        picks.append(("지금 자리", local))
+    if not picks:
+        return None
+    best_name, best = max(picks, key=lambda item: item[1].score)
+    if route_hit is not None and route_hit[1].score >= best.score - 0.03:
+        best_name, best = route_hit[0], route_hit[1]
+    odo.set_pose(best.x, best.y, best.yaw)
+    slam.seed(odo)
+    return best_name, best
 
 
 def restore_heading(grid, odo, lidar, data):
@@ -510,21 +554,23 @@ def choose_start_mode(has_route):
     return "replay"
 
 
-def auto_progress_line(odo, follower):
-    n = len(follower.points)
-    i = min(follower.i + 1, n)
+def auto_progress_line(odo, follower, start, waypoints, goal, stuck_s=0.0):
     cur = follower.current()
     if cur is None:
+        end = (odo.x, odo.y)
+        i, n = route_number(end, start, waypoints, goal)
         return f"[auto] 점 {n}/{n} 도착"
+    i, n = route_number(cur, start, waypoints, goal)
     dist = math.hypot(cur[0] - odo.x, cur[1] - odo.y)
     left = follower.remaining_m(odo)
     err_deg = math.degrees(follower.heading_err(odo))
+    stall = f"  정체 {stuck_s:.1f}s" if stuck_s >= 1.0 else ""
     return (
         f"[auto] 점 {i}/{n}  "
         f"지금 ({odo.x:.2f},{odo.y:.2f})  "
         f"다음 ({cur[0]:.2f},{cur[1]:.2f})  "
         f"여기까지 {dist:.2f}m  남은 {left:.2f}m  "
-        f"앞각 {err_deg:+.0f}°"
+        f"앞각 {err_deg:+.0f}°{stall}"
     )
 
 
@@ -556,8 +602,7 @@ def main():
         slam = None
         recording = start_mode == "record"
         last_record_t = time.monotonic()
-        last_move_xy = (0.0, 0.0)
-        last_move_yaw = 0.0
+        last_progress_m = None
         last_move_t = time.monotonic()
         last_follow_i = -1
         last_scan_t = None
@@ -630,12 +675,6 @@ def main():
                     print(c_info(f"경로 {len(waypoints)} {waypoints[-1]}"))
 
             if mode == "auto":
-                moved_xy = math.hypot(odo.x - last_move_xy[0], odo.y - last_move_xy[1])
-                moved_yaw = abs(wrap_angle(odo.yaw - last_move_yaw))
-                if moved_xy >= STALL_MOVE_M or moved_yaw >= STALL_YAW:
-                    last_move_xy = (odo.x, odo.y)
-                    last_move_yaw = odo.yaw
-                    last_move_t = now
                 scan_age = None if last_scan_t is None else now - last_scan_t
                 fresh = scan_age is not None and scan_age < 0.7
                 live_scan = last_points if fresh else None
@@ -667,8 +706,7 @@ def main():
                         else:
                             follower = Follower(path)
                             last_follow_i = -1
-                            last_move_xy = (odo.x, odo.y)
-                            last_move_yaw = odo.yaw
+                            last_progress_m = None
                             last_move_t = now
                             print(
                                 c_auto(
@@ -689,11 +727,20 @@ def main():
                     recover.abort()
                     print(c_ok("경로 끝"))
                 else:
+                    left = follower.remaining_m(odo)
+                    if last_progress_m is None:
+                        last_progress_m = left
+                        last_move_t = now
+                    elif last_progress_m - left >= STALL_MOVE_M:
+                        last_progress_m = left
+                        last_move_t = now
                     stuck_s = now - last_move_t
                     trigger = None
                     if scan_age is not None and scan_age >= LIDAR_STALL_S:
                         trigger = f"라이다 {scan_age:.1f}s 정지. 바닥에 걸린 듯"
-                    elif fresh and front_blocked(last_points):
+                    elif last_points and (
+                        scan_age is None or scan_age < LIDAR_STALL_S
+                    ) and front_blocked(last_points):
                         trigger = "전방 장애물"
                     elif stuck_s >= STALL_S:
                         trigger = f"움직임 정체 {stuck_s:.1f}s"
@@ -716,19 +763,28 @@ def main():
                                 )
                             )
                     else:
+                        follower.step(drive, odo, speed)
                         if follower.i != last_follow_i:
+                            if (
+                                last_follow_i >= 0
+                                and follower.i > last_follow_i
+                                and recover.tries
+                            ):
+                                recover.tries = 0
+                                print(c_ok("점 통과. 회복 횟수 리셋"))
                             last_follow_i = follower.i
-                            n = len(follower.points)
                             cur = follower.current()
                             if cur is not None:
+                                i, n = route_number(
+                                    cur, start, waypoints, goal
+                                )
                                 print(
                                     c_auto(
-                                        f"점 {follower.i + 1}/{n} 추종  "
+                                        f"점 {i}/{n} 추종  "
                                         f"다음 ({cur[0]:.2f},{cur[1]:.2f})  "
                                         f"남은 {follower.remaining_m(odo):.2f}m"
                                     )
                                 )
-                        follower.step(drive, odo, speed)
 
             ch = keys.read(0.0 if mode == "auto" else 0.02)
             if ch is None:
@@ -743,7 +799,18 @@ def main():
                             )
                         )
                     elif mode == "auto" and follower is not None and not follower.done():
-                        print(c_auto(auto_progress_line(odo, follower)))
+                        print(
+                            c_auto(
+                                auto_progress_line(
+                                    odo,
+                                    follower,
+                                    start,
+                                    waypoints,
+                                    goal,
+                                    stuck_s=now - last_move_t,
+                                )
+                            )
+                        )
                     else:
                         rec = c_ok("ON") if recording else c_dim("off")
                         print(
@@ -773,6 +840,8 @@ def main():
                 "+",
                 "-",
                 "=",
+                "r",
+                "l",
             ):
                 mode = "teleop"
                 follower = None
@@ -842,29 +911,11 @@ def main():
                 if not scan:
                     print(c_warn("스캔 없음"))
                     continue
-                data_now = {
-                    "start": start,
-                    "waypoints": waypoints,
-                    "goal": goal,
-                }
-                found = None
-                name = "지금 자리"
-                if waypoints or goal:
-                    route_hit = localize_on_route(grid, scan, data_now)
-                    if route_hit is not None:
-                        found = route_hit[1]
-                        name = route_hit[0]
-                local = match_heading(grid, odo.x, odo.y, scan, min_score=0.10)
-                if local is not None and (
-                    found is None or local.score > found.score + 0.03
-                ):
-                    found = local
-                    name = "지금 자리"
-                if found is None:
+                hit = snap_to_route(grid, odo, slam, scan, start, waypoints, goal)
+                if hit is None:
                     print(c_err("방향 맞춤 실패. 지도를 더 그리거나 경로 위에 두세요"))
                     continue
-                odo.set_pose(found.x, found.y, found.yaw)
-                slam.seed(odo)
+                name, found = hit
                 extra = " (애매)" if found.ambiguous else ""
                 print(
                     c_ok(
@@ -891,6 +942,21 @@ def main():
                     waypoints, goal = seal_goal(odo, waypoints, goal)
                     recording = False
                     print(c_ok(f"기록 종료. 도착 {goal}"))
+                print(c_dim("경로 위치 맞추는 중..."))
+                scan = collect_scan(lidar, n=4, timeout_s=6.0) or last_points
+                hit = snap_to_route(grid, odo, slam, scan, start, waypoints, goal)
+                if hit is None:
+                    print(c_warn("스캔 맞춤 실패. 지금 좌표로 재생합니다"))
+                else:
+                    name, found = hit
+                    extra = " (애매)" if found.ambiguous else ""
+                    print(
+                        c_ok(
+                            f"{name} 맞춤 x={found.x:.2f} y={found.y:.2f} "
+                            f"yaw={math.degrees(found.yaw):.0f}° "
+                            f"score={found.score:.2f}{extra}"
+                        )
+                    )
                 targets = remaining_targets(odo, start, waypoints, goal)
                 if not targets:
                     print(c_warn("이미 찍은 점에 다 와 있습니다"))
@@ -909,12 +975,12 @@ def main():
                 recover.abort()
                 recover.tries = 0
                 last_follow_i = -1
-                last_move_xy = (odo.x, odo.y)
-                last_move_yaw = odo.yaw
+                last_progress_m = None
                 last_move_t = time.monotonic()
+                i, n = route_number(targets[0], start, waypoints, goal)
                 print(
                     c_auto(
-                        f"경로 재생 {len(path)}점. "
+                        f"경로 재생 {i}/{n}. "
                         f"시작 ({odo.x:.2f},{odo.y:.2f}) → "
                         f"끝 ({path[-1][0]:.2f},{path[-1][1]:.2f})  "
                         f"아무 키면 수동"
