@@ -6,6 +6,7 @@
 import json
 import math
 import select
+import shutil
 import sys
 import termios
 import time
@@ -19,7 +20,7 @@ from robot.drive import Drive
 from robot.follow import Follower
 from robot.grid import OccupancyGrid
 from robot.lidar import Lidar
-from robot.localize import match_heading, wrap_angle
+from robot.localize import MIN_OCC, match_heading, match_scan, wrap_angle
 from robot.odometry import Odometry
 from robot.pins import (
     ARRIVE_M,
@@ -44,6 +45,8 @@ OUT_PGM = ROOT / "maps" / "last_map.pgm"
 OUT_BMP = ROOT / "maps" / "last_map.bmp"
 OUT_TXT = ROOT / "maps" / "last_map.txt"
 OUT_JSON = ROOT / "maps" / "last_route.json"
+OUT_PGM_BAK = ROOT / "maps" / "last_map.bak.pgm"
+OUT_JSON_BAK = ROOT / "maps" / "last_route.bak.json"
 
 USE_COLOR = sys.stdout.isatty()
 
@@ -220,15 +223,16 @@ def seal_goal(odo, waypoints, goal):
     return waypoints, p
 
 
-def save_session(grid, odo, start, waypoints, goal, ascii_map=None):
-    grid.save_pgm(OUT_PGM)
-    grid.save_bmp(OUT_BMP)
+def save_session(grid, odo, start, waypoints, goal, ascii_map=None, replace_map=True):
+    OUT_TXT.parent.mkdir(parents=True, exist_ok=True)
+    if replace_map:
+        grid.save_pgm(OUT_PGM)
+        grid.save_bmp(OUT_BMP)
     if ascii_map is None:
         ascii_map = grid.render_ascii(
             pose=(odo.x, odo.y),
             marks=mark_list(start, waypoints, goal),
         )
-    OUT_TXT.parent.mkdir(parents=True, exist_ok=True)
     OUT_TXT.write_text(ascii_map + "\n", encoding="utf-8")
     data = {
         "start": start,
@@ -239,6 +243,12 @@ def save_session(grid, odo, start, waypoints, goal, ascii_map=None):
         "grid": {"size_m": grid.size_m, "resolution": grid.resolution},
     }
     OUT_JSON.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    if replace_map and grid.occ_n >= MIN_OCC and (goal is not None or waypoints):
+        try:
+            shutil.copy2(OUT_PGM, OUT_PGM_BAK)
+            shutil.copy2(OUT_JSON, OUT_JSON_BAK)
+        except OSError:
+            pass
     return OUT_PGM, OUT_JSON
 
 
@@ -252,21 +262,38 @@ def print_save_hint():
     print(c_dim(f"PC에서: scp USER@파이IP:{bmp} ."))
 
 
-def load_session():
-    if not OUT_JSON.exists() or not OUT_PGM.exists():
+def _load_pair(json_path, pgm_path):
+    if not json_path.exists() or not pgm_path.exists():
         return None
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    meta = data.get("grid") or {}
+    grid = OccupancyGrid.from_pgm(
+        pgm_path,
+        size_m=float(meta.get("size_m", 16.0)),
+        resolution=float(meta.get("resolution", 0.05)),
+    )
+    return data, grid
+
+
+def load_session():
     try:
-        data = json.loads(OUT_JSON.read_text(encoding="utf-8"))
-        meta = data.get("grid") or {}
-        grid = OccupancyGrid.from_pgm(
-            OUT_PGM,
-            size_m=float(meta.get("size_m", 16.0)),
-            resolution=float(meta.get("resolution", 0.05)),
-        )
-        return data, grid
+        loaded = _load_pair(OUT_JSON, OUT_PGM)
     except (OSError, ValueError, json.JSONDecodeError, TypeError) as exc:
         print(c_err(f"이전 지도 읽기 실패: {exc}"))
+        loaded = None
+    if loaded is not None and loaded[1].occ_n >= MIN_OCC:
+        return loaded
+    try:
+        bak = _load_pair(OUT_JSON_BAK, OUT_PGM_BAK)
+    except (OSError, ValueError, json.JSONDecodeError, TypeError):
+        bak = None
+    if bak is not None and bak[1].occ_n >= MIN_OCC:
+        print(c_warn("지금 지도가 비어 있거나 깨져서 백업 지도를 씁니다"))
+        return bak
+    if loaded is None:
         return None
+    print(c_warn(f"저장 지도가 얇습니다 (칸 {loaded[1].occ_n}). 재생이 실패할 수 있습니다"))
+    return loaded
 
 
 def collect_scan(lidar, n=4, timeout_s=8.0):
@@ -284,35 +311,41 @@ def collect_scan(lidar, n=4, timeout_s=8.0):
 
 
 def restore_heading(grid, odo, lidar, data):
-    points = collect_scan(lidar)
+    print(c_dim("라이다 켜는 중. 1초 대기..."))
+    time.sleep(1.0)
+    points = collect_scan(lidar, n=6, timeout_s=12.0)
     if not points:
         print(c_warn("방향 맞춤용 스캔이 없습니다"))
         return False
+    if grid.occ_n < MIN_OCC:
+        print(c_err(f"저장 지도가 거의 비었습니다 (칸 {grid.occ_n}). 다시 그려야 합니다"))
+        return False
     start = data.get("start") or [0.0, 0.0, 0.0]
-    spots = [("시작점", float(start[0]), float(start[1]))]
+    sx, sy = float(start[0]), float(start[1])
+    syaw = float(start[2]) if len(start) > 2 else 0.0
+    picks = []
+    prior = match_scan(grid, sx, sy, syaw, points, xy_m=0.45, yaw_rad=0.75)
+    if prior is not None and prior.score >= 0.10:
+        picks.append(("시작점(저장각)", prior))
+    spots = [("시작점", sx, sy)]
     pose = data.get("pose")
     if pose is not None and (
-        abs(float(pose[0]) - float(start[0])) > 0.2
-        or abs(float(pose[1]) - float(start[1])) > 0.2
+        abs(float(pose[0]) - sx) > 0.2 or abs(float(pose[1]) - sy) > 0.2
     ):
         spots.append(("마지막 위치", float(pose[0]), float(pose[1])))
-    best = None
-    best_name = None
     for name, x, y in spots:
-        found = match_heading(grid, x, y, points)
+        found = match_heading(grid, x, y, points, xy_m=0.55, min_score=0.10)
         if found is None:
             continue
-        if best is None or found.score > best.score:
-            best = found
-            best_name = name
-    if best is None:
-        print(c_err("이전 지도와 지금 스캔이 안 맞습니다. 빈 지도로 다시 그립니다"))
+        picks.append((name, found))
+    if not picks:
+        print(c_err("이전 지도와 지금 스캔이 안 맞습니다"))
         return False
-    if best.ambiguous:
-        print(c_warn("방향이 여러 개로 맞습니다. 지도를 다시 그린 뒤 쓰세요"))
-        return False
+    best_name, best = max(picks, key=lambda item: item[1].score)
     odo.set_pose(best.x, best.y, best.yaw)
-    extra = " (방향이 비슷해서 애매할 수 있음)" if best.ambiguous else ""
+    extra = ""
+    if best.ambiguous:
+        extra = " (여러 각이 비슷. 틀리면 l)"
     print(
         c_ok(
             f"방향 맞춤 {best_name} x={best.x:.2f} y={best.y:.2f} "
@@ -343,16 +376,18 @@ def help_text():
 
 
 def peek_saved_route():
-    if not OUT_JSON.exists() or not OUT_PGM.exists():
-        return False
-    try:
-        data = json.loads(OUT_JSON.read_text(encoding="utf-8"))
-    except (OSError, ValueError, json.JSONDecodeError, TypeError):
-        return False
-    if data.get("goal") is not None:
-        return True
-    wps = data.get("waypoints") or []
-    return len(wps) > 0
+    for path in (OUT_JSON, OUT_JSON_BAK):
+        if not path.exists():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError, TypeError):
+            continue
+        if data.get("goal") is not None:
+            return True
+        if data.get("waypoints"):
+            return True
+    return False
 
 
 def choose_start_mode(has_route):
@@ -420,43 +455,53 @@ def main():
         last_follow_i = -1
         last_scan_t = None
         recover = Recoverer()
+        map_writable = True
 
         drive.enable()
         lidar.start()
         if loaded is not None:
             data, loaded_grid = loaded
-            if restore_heading(loaded_grid, odo, lidar, data):
-                grid = loaded_grid
-                start = data.get("start") or [0.0, 0.0, 0.0]
-                waypoints = list(data.get("waypoints") or [])
-                goal = data.get("goal")
+            grid = loaded_grid
+            start = data.get("start") or [0.0, 0.0, 0.0]
+            waypoints = list(data.get("waypoints") or [])
+            goal = data.get("goal")
+            ok = restore_heading(loaded_grid, odo, lidar, data)
+            if not ok:
+                odo.set_pose(
+                    float(start[0]),
+                    float(start[1]),
+                    float(start[2]) if len(start) > 2 else 0.0,
+                )
+                print(
+                    c_warn(
+                        "방향 맞춤 실패. 저장한 시작 좌표를 씁니다. "
+                        "앞이 반대면 l. 지도는 버리지 않습니다"
+                    )
+                )
+            if start_mode == "replay" and (goal is not None or waypoints):
+                recording = False
+                map_writable = False
+                print(c_ok("재생 모드. 기록 꺼짐. 지도는 고정. r 이면 따라갑니다"))
+            elif start_mode == "record":
+                recording = True
+                map_writable = True
                 if goal is not None or waypoints:
-                    if start_mode == "replay":
-                        recording = False
-                        print(c_ok("재생 모드. 기록 꺼짐. r 이면 따라갑니다"))
-                    else:
-                        waypoints = []
-                        goal = None
-                        recording = True
-                        print(c_info("기록 모드. 이전 경로는 비웠습니다. 지도는 유지. 도착에서 k"))
+                    waypoints = []
+                    goal = None
+                    print(c_info("기록 모드. 이전 경로는 비웠습니다. 지도는 유지. 도착에서 k"))
                 else:
-                    if start_mode == "replay":
-                        recording = False
-                        print(c_info("저장 지도만 있습니다. 재생할 점이 없어 기록은 꺼둠. k 로 찍기"))
-                    else:
-                        recording = True
-                        print(c_info("저장 지도를 썼습니다. 주행하면 경로가 자동으로 찍힙니다"))
+                    print(c_info("저장 지도를 썼습니다. 주행하면 경로가 자동으로 찍힙니다"))
             else:
-                grid = OccupancyGrid(size_m=16.0, resolution=0.05)
-                if start_mode == "replay":
-                    recording = True
-                    print(c_warn("이전 지도와 안 맞아 빈 지도입니다. 기록 모드로 바꿉니다"))
+                recording = False
+                map_writable = False
+                print(c_info("저장 지도만 있습니다. 재생할 점이 없어 기록은 꺼둠. k 로 찍기"))
         else:
             grid = OccupancyGrid(size_m=16.0, resolution=0.05)
+            recording = True
+            map_writable = True
             if start_mode == "replay":
-                recording = True
-                print(c_warn("저장 파일을 못 읽어 기록 모드로 시작합니다"))
-        slam = Slam(grid)
+                print(c_warn("쓸 저장 지도가 없습니다. 기록 모드로 시작합니다"))
+        slam = Slam(grid, update_map=map_writable)
         slam.seed(odo)
         if recording:
             print(c_info("지도+조작 시작. 주행 중 1초마다 경로 기록, 도착에서 k"))
@@ -747,8 +792,13 @@ def main():
             lidar.close()
         keys.close()
         if grid is not None and odo is not None:
-            save_session(grid, odo, start, waypoints, goal)
-            print(c_dim("라이다·모터 OFF. 지도 저장"))
+            save_session(
+                grid, odo, start, waypoints, goal, replace_map=map_writable
+            )
+            if map_writable:
+                print(c_dim("라이다·모터 OFF. 지도 저장"))
+            else:
+                print(c_dim("라이다·모터 OFF. 재생이라 지도 파일은 그대로 둡니다"))
             print_save_hint()
 
 

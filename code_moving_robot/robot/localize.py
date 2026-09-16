@@ -148,7 +148,7 @@ def match_yaw(grid, x, y, points):
     return Match(x, y, best_yaw, best_s)
 
 
-def match_heading(grid, x, y, points, xy_m=0.35):
+def match_heading(grid, x, y, points, xy_m=0.35, min_score=MIN_HEADING_SCORE):
     """위치는 대략 알고 yaw는 모를 때. 한 바퀴를 다 본다."""
     if grid.occ_n < MIN_OCC:
         return None
@@ -183,7 +183,7 @@ def match_heading(grid, x, y, points, xy_m=0.35):
                 if s is not None and s > best_s:
                     best_s = s
                     best = (fx + dx, fy + dy, fyaw + dth)
-    if best_s < MIN_HEADING_SCORE:
+    if best_s < min_score:
         return None
     found = Match(best[0], best[1], best[2], best_s)
     found.ambiguous = False

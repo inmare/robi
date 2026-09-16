@@ -12,8 +12,9 @@ MIN_SLAM_SCORE = 0.12
 
 
 class Slam:
-    def __init__(self, grid):
+    def __init__(self, grid, update_map=True):
         self.grid = grid
+        self.update_map = update_map
         self.last_x = None
         self.last_y = None
         self.last_yaw = None
@@ -33,7 +34,8 @@ class Slam:
             self.seed(odo)
 
         if self.grid.occ_n < MIN_OCC:
-            self.grid.add_scan(odo.x, odo.y, odo.yaw, points)
+            if self.update_map:
+                self.grid.add_scan(odo.x, odo.y, odo.yaw, points)
             self.seed(odo)
             self.last_score = None
             return
@@ -63,7 +65,8 @@ class Slam:
                 ok = False
         if ok:
             odo.set_pose(found.x, found.y, found.yaw)
-            self.grid.add_scan(odo.x, odo.y, odo.yaw, points)
+            if self.update_map:
+                self.grid.add_scan(odo.x, odo.y, odo.yaw, points)
             self.last_score = found.score
             self.seed(odo)
             return
