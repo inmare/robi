@@ -11,6 +11,7 @@ import time
 from robot.localize import wrap_angle
 from robot.pins import (
     HIT_AHEAD_M,
+    HIT_DEPTH_M,
     NAV_SPEED,
     RECOVER_BACK_M,
     RECOVER_CLEAR_M,
@@ -81,12 +82,37 @@ def side_clearance(points, side):
     return min(side_c, front_c)
 
 
-def choose_detour(scan, x, y, yaw, rest, clear_m=RECOVER_CLEAR_M):
-    """남은 경로에 더 가까운 빈쪽. 더 넓은 빈 공간을 고르지 않는다.
+def dist_to_disks(xy, disks):
+    """디스크 표면까지 거리. 안이면 음수. 없으면 멀리."""
+    if not disks:
+        return 8.0
+    best = None
+    for d in disks:
+        gap = math.hypot(xy[0] - d[0], xy[1] - d[1]) - d[2]
+        if best is None or gap < best:
+            best = gap
+    return best if best is not None else 8.0
 
-    다음 점만 보면 장애물 쪽을 가리키는 경우가 많아서, 우회 착지점이
-    남은 폴리라인에 얼마나 가까운지로 고른다. +1 왼, -1 오, 0 실패.
-    """
+
+def hit_corridor(x, y, yaw, ahead_m=HIT_AHEAD_M, depth_m=HIT_DEPTH_M, radius=VIRTUAL_BLOCK_M):
+    """실패한 진행 방향 앞을 여러 원으로 막아 같은 통로로 안 돌아가게 한다."""
+    n = 4
+    out = []
+    span = max(depth_m - ahead_m, 0.05)
+    for i in range(n):
+        t = ahead_m + span * i / max(n - 1, 1)
+        out.append(
+            (
+                x + t * math.cos(yaw),
+                y + t * math.sin(yaw),
+                radius,
+            )
+        )
+    return out
+
+
+def choose_detour(scan, x, y, yaw, rest, clear_m=RECOVER_CLEAR_M, disks=None):
+    """남은 경로에 가깝되, 기억한 장애물 쪽으로는 안 간다."""
     min_go = min(0.32, clear_m)
     rest = list(rest or [])
     left = side_clearance(scan, 1)
@@ -97,6 +123,14 @@ def choose_detour(scan, x, y, yaw, rest, clear_m=RECOVER_CLEAR_M):
         if cl < min_go:
             continue
         hx, hy, tyaw = hop_pose(x, y, yaw, side, RECOVER_TURN_RAD, RECOVER_SIDE_M)
+        look = (
+            hx + 0.50 * math.cos(tyaw),
+            hy + 0.50 * math.sin(tyaw),
+        )
+        d_disk = dist_to_disks(look, disks)
+        d_land = dist_to_disks((hx, hy), disks)
+        if d_land < 0.08:
+            continue
         if rest:
             d_path = dist_to_polyline((hx, hy), rest)
             want = math.atan2(rest[0][1] - hy, rest[0][0] - hx)
@@ -104,7 +138,12 @@ def choose_detour(scan, x, y, yaw, rest, clear_m=RECOVER_CLEAR_M):
         else:
             d_path = 0.0
             turn_after = 0.0
-        score = d_path + 0.35 * turn_after - 0.08 * min(cl, 1.2)
+        score = (
+            d_path
+            + 0.30 * turn_after
+            - 0.06 * min(cl, 1.2)
+            - 0.85 * min(max(d_disk, -0.2), 1.6)
+        )
         if best_score is None or score < best_score:
             best_score = score
             best_side = side
@@ -130,7 +169,7 @@ def pick_side(points, prefer=0, clear_m=RECOVER_CLEAR_M, rest=None, pose=None):
     rest = list(rest or [])
     if not rest and prefer != 0:
         rest = [(1.0, 0.45 * prefer)]
-    return choose_detour(points, x, y, yaw, rest, clear_m=clear_m)
+    return choose_detour(points, x, y, yaw, rest, clear_m=clear_m, disks=None)
 
 
 def skip_near(points, hit_xy, skip_m=0.40):
@@ -139,6 +178,25 @@ def skip_near(points, hit_xy, skip_m=0.40):
         return rest
     if points:
         return [points[-1]]
+    return []
+
+
+def point_in_disks(p, disks, pad=0.18):
+    for d in disks or []:
+        if math.hypot(p[0] - d[0], p[1] - d[1]) <= d[2] + pad:
+            return True
+    return False
+
+
+def skip_blocked(points, disks, pad=0.18):
+    """기억한 장애물 안·바로 앞 점은 버린다. 같은 방향으로 다시 붙지 않게."""
+    if not points:
+        return []
+    if not disks:
+        return list(points)
+    kept = [p for p in points if not point_in_disks(p, disks, pad=pad)]
+    if kept:
+        return kept
     return []
 
 
@@ -167,21 +225,26 @@ def seg_hits_disks(a, b, disks, pad=0.12):
 
 
 def splice_path(grid, odo, rest, extra_disks):
-    """우회한 자리에서 남은 점으로.
-
-    짧은 경로는 A*가 가상 장애물을 멀리 돌아 반대쪽으로 붙는 일이 있다.
-    직선이 디스크를 안 지나면 원래 점을 그대로 잇는다.
-    """
-    rest = list(rest)
+    """우회한 자리에서 남은 점으로. 기억 장애물을 지나는 빵가루는 잇지 않는다."""
+    rest = skip_blocked(rest, extra_disks)
     if not rest:
         return []
     here = (odo.x, odo.y)
-    if not seg_hits_disks(here, rest[0], extra_disks):
-        return thin_path([here] + rest)
-    chunk = plan(grid, here, rest[0], extra_disks=extra_disks)
-    if len(chunk) < 2:
-        chunk = [here, rest[0]]
-    return thin_path(chunk + rest[1:])
+    path = [here]
+    for nxt in rest:
+        nxt = (float(nxt[0]), float(nxt[1]))
+        if point_in_disks(nxt, extra_disks):
+            continue
+        cur = path[-1]
+        if not seg_hits_disks(cur, nxt, extra_disks, pad=0.18):
+            path.append(nxt)
+            continue
+        chunk = plan(grid, cur, nxt, extra_disks=extra_disks)
+        if len(chunk) >= 2:
+            path.extend(chunk[1:])
+    if len(path) < 2:
+        return []
+    return thin_path(path)
 
 
 class Recoverer:
@@ -225,9 +288,7 @@ class Recoverer:
         self._rest = list(rest or [])
         if target is not None and not self._rest:
             self._rest = [target]
-        hx = odo.x + HIT_AHEAD_M * math.cos(odo.yaw)
-        hy = odo.y + HIT_AHEAD_M * math.sin(odo.yaw)
-        self.disks.append((hx, hy, VIRTUAL_BLOCK_M))
+        self.disks.extend(hit_corridor(odo.x, odo.y, odo.yaw))
         self.log = f"후진 {RECOVER_BACK_M:.2f}m ({reason})"
 
     def hit_xy(self):
@@ -280,9 +341,9 @@ class Recoverer:
     def _wait_lidar(self, drive, odo, scan, now):
         drive.stop(odo)
         if scan and len(scan) >= 12:
-            rest = skip_near(self._rest, self.hit_xy())
+            rest = skip_blocked(self._rest, self.disks)
             side, left, right = choose_detour(
-                scan, odo.x, odo.y, odo.yaw, rest
+                scan, odo.x, odo.y, odo.yaw, rest, disks=self.disks
             )
             if side == 0:
                 return self._fail(

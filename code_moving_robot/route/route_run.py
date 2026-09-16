@@ -37,7 +37,7 @@ from robot.pins import (
     TRACK_M,
 )
 from robot.planner import plan
-from robot.recover import Recoverer, skip_near, splice_path
+from robot.recover import Recoverer, skip_blocked, splice_path, point_in_disks, seg_hits_disks
 from robot.slam import Slam
 
 OUT_PGM = ROOT / "maps" / "last_map.pgm"
@@ -151,24 +151,33 @@ def build_path(grid, odo, targets, extra_disks=None):
     """기록점은 이미 지나온 길이므로 짧은 구간은 그대로 잇는다.
 
     맵의 # 조각·미지 칸 때문에 A*가 전부 실패하던 것을 막는다.
-    바닥 장애물은 extra_disks로 남겨 다시 그 자리로 안 가게 한다.
+    기억한 바닥 장애물을 지나는 짧은 직선은 잇지 않는다.
     """
     if not targets:
         return []
-    pts = [(odo.x, odo.y)] + [(t[0], t[1]) for t in targets]
-    path = [pts[0]]
+    pts = skip_blocked([(t[0], t[1]) for t in targets], extra_disks)
+    if not pts:
+        return []
+    path = [(odo.x, odo.y)]
     hop_m = 1.6
-    for nxt in pts[1:]:
+    for nxt in pts:
+        nxt = (float(nxt[0]), float(nxt[1]))
         cur = path[-1]
         dist = _xy_dist(cur, nxt)
-        if dist < hop_m:
+        hits = extra_disks and (
+            point_in_disks(nxt, extra_disks) or seg_hits_disks(cur, nxt, extra_disks)
+        )
+        if dist < hop_m and not hits:
             path.append(nxt)
             continue
-        chunk = plan(grid, cur, nxt, extra_disks=extra_disks)
-        if len(chunk) >= 2:
-            path.extend(chunk[1:])
-        else:
-            path.append(nxt)
+        if hits or dist >= hop_m:
+            chunk = plan(grid, cur, nxt, extra_disks=extra_disks)
+            if len(chunk) >= 2:
+                path.extend(chunk[1:])
+                continue
+            if hits:
+                continue
+        path.append(nxt)
     return thin_path(path)
 
 
@@ -326,11 +335,38 @@ def mark_list(start, waypoints, goal):
 
 def help_text():
     return (
-        "wasd 이동  스페이스 정지  +/- 속도  e 경로기록 on/off\n"
-        "수동: 1 시작  2 경유  3 도착  | 기록은 1초마다, 도착에서 e\n"
+        "wasd 이동  스페이스 정지  +/- 속도  k 경로기록 on/off\n"
+        "수동: 1 시작  2 경유  3 도착  | 기록은 1초마다, 도착에서 k\n"
         "m 지도  r 재생  t 수동  l 방향  p 좌표  S 저장  q 종료\n"
         "자동: 자홍=위치  노랑=정체/회복(후진·좌우·우회)"
     )
+
+
+def peek_saved_route():
+    if not OUT_JSON.exists() or not OUT_PGM.exists():
+        return False
+    try:
+        data = json.loads(OUT_JSON.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError, TypeError):
+        return False
+    if data.get("goal") is not None:
+        return True
+    wps = data.get("waypoints") or []
+    return len(wps) > 0
+
+
+def choose_start_mode(has_route):
+    """기록/재생을 시작 전에 고른다. wasd 옆 e 오입을 피하려고 기록은 k."""
+    if not has_route:
+        print(c_info("저장 경로 없음. 기록 모드. 도착에서 k"))
+        return "record"
+    print(c_ok("저장한 경로가 있습니다."))
+    print(c_info("  1  재생 모드  (기록 꺼짐, r 로 따라가기)"))
+    print(c_info("  2  기록 모드  (새로 찍기, 도착에서 k)"))
+    raw = input(c_warn("선택 [1 재생]: ")).strip().lower()
+    if raw in ("2", "k", "record", "기록"):
+        return "record"
+    return "replay"
 
 
 def auto_progress_line(odo, follower):
@@ -354,6 +390,7 @@ def auto_progress_line(odo, follower):
 def main():
     print(c_info(help_text()))
     print(c_dim(f"원점=시작. TRACK_M={TRACK_M:.3f}m (바퀴 중심 사이, robot/pins.py)"))
+    start_mode = choose_start_mode(peek_saved_route())
     input(c_warn("준비되면 Enter. 모터 6V는 그 다음에 켜세요..."))
 
     keys = Keys()
@@ -375,7 +412,7 @@ def main():
         last_status = 0.0
         last_points = None
         slam = None
-        recording = True
+        recording = start_mode == "record"
         last_record_t = time.monotonic()
         last_move_xy = (0.0, 0.0)
         last_move_yaw = 0.0
@@ -394,18 +431,35 @@ def main():
                 waypoints = list(data.get("waypoints") or [])
                 goal = data.get("goal")
                 if goal is not None or waypoints:
-                    print(c_ok("저장한 경로가 있습니다. r 이면 재생, e 면 새로 찍기"))
-                    recording = False
+                    if start_mode == "replay":
+                        recording = False
+                        print(c_ok("재생 모드. 기록 꺼짐. r 이면 따라갑니다"))
+                    else:
+                        waypoints = []
+                        goal = None
+                        recording = True
+                        print(c_info("기록 모드. 이전 경로는 비웠습니다. 지도는 유지. 도착에서 k"))
                 else:
-                    print(c_info("저장 지도를 썼습니다. 주행하면 경로가 자동으로 찍힙니다"))
+                    if start_mode == "replay":
+                        recording = False
+                        print(c_info("저장 지도만 있습니다. 재생할 점이 없어 기록은 꺼둠. k 로 찍기"))
+                    else:
+                        recording = True
+                        print(c_info("저장 지도를 썼습니다. 주행하면 경로가 자동으로 찍힙니다"))
             else:
                 grid = OccupancyGrid(size_m=16.0, resolution=0.05)
+                if start_mode == "replay":
+                    recording = True
+                    print(c_warn("이전 지도와 안 맞아 빈 지도입니다. 기록 모드로 바꿉니다"))
         else:
             grid = OccupancyGrid(size_m=16.0, resolution=0.05)
+            if start_mode == "replay":
+                recording = True
+                print(c_warn("저장 파일을 못 읽어 기록 모드로 시작합니다"))
         slam = Slam(grid)
         slam.seed(odo)
         if recording:
-            print(c_info("지도+조작 시작. 주행 중 1초마다 경로 기록, 도착에서 e"))
+            print(c_info("지도+조작 시작. 주행 중 1초마다 경로 기록, 도착에서 k"))
         else:
             print(c_info("지도+조작 시작. 저장 경로 재생. r"))
         while True:
@@ -446,10 +500,11 @@ def main():
                             print(c_warn(recover.log))
                     if result == "ok":
                         rest = []
+                        skipped = 0
                         if follower is not None:
-                            rest = skip_near(
-                                follower.remaining_points(), recover.hit_xy()
-                            )
+                            raw = follower.remaining_points()
+                            rest = skip_blocked(raw, recover.disks)
+                            skipped = max(0, len(raw) - len(rest))
                         path = splice_path(grid, odo, rest, recover.disks)
                         if len(path) < 2:
                             drive.stop(odo)
@@ -466,6 +521,7 @@ def main():
                             print(
                                 c_auto(
                                     f"경로 재연결 {len(path)}점  "
+                                    f"막힌점 {skipped}  기억 {len(recover.disks)}  "
                                     f"지금 ({odo.x:.2f},{odo.y:.2f})"
                                 )
                             )
@@ -579,7 +635,7 @@ def main():
             elif ch == "-":
                 speed = max(0.42, speed - 0.04)
                 print(c_dim(f"속도 {speed:.2f}"))
-            elif ch == "e":
+            elif ch in ("k", "K"):
                 if recording:
                     waypoints, goal = seal_goal(odo, waypoints, goal)
                     recording = False
@@ -592,7 +648,9 @@ def main():
                     recording = True
                     goal = None
                     last_record_t = time.monotonic()
-                    print(c_info("경로 기록 시작. 도착 칸에서 다시 e"))
+                    print(c_info("경로 기록 시작. 도착 칸에서 다시 k"))
+            elif ch in ("e", "E"):
+                print(c_dim("기록은 k 입니다. e는 wasd 옆이라 뺐습니다. 재생은 r"))
             elif ch == "1":
                 start = pose_tuple(odo)
                 print(c_ok(f"시작 {start}"))

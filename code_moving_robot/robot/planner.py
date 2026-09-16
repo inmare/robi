@@ -62,9 +62,15 @@ def astar(grid, start_xy, goal_xy, inflate_m=INFLATE_M, free_only=False, extra_d
     goal = grid.world_to_cell(goal_xy[0], goal_xy[1])
     if start is None or goal is None:
         return []
-    blocked = _inflate(grid, inflate_m, extra_disks=extra_disks)
+    blocked = _inflate(grid, inflate_m, extra_disks=None)
     _clear_around(blocked, start, grid.n)
     _clear_around(blocked, goal, grid.n)
+    if extra_disks:
+        pad = max(inflate_m, 0.0)
+        for disk in extra_disks:
+            _add_disk(blocked, grid, disk[0], disk[1], disk[2] + pad)
+    if start in blocked:
+        blocked.discard(start)
     if goal in blocked:
         return []
 

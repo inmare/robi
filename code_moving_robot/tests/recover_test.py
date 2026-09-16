@@ -9,7 +9,14 @@ sys.path.insert(0, str(ROOT))
 
 from robot.grid import OccupancyGrid
 from robot.planner import plan
-from robot.recover import choose_detour, pick_side, skip_near, splice_path
+from robot.recover import (
+    choose_detour,
+    hit_corridor,
+    pick_side,
+    skip_blocked,
+    skip_near,
+    splice_path,
+)
 
 
 class FakeOdo:
@@ -74,6 +81,33 @@ def test_plan_goes_around_virtual_disk():
         assert math.hypot(p[0] - 0.6, p[1] - 0.0) > 0.18, p
 
 
+def test_skip_blocked_drops_corridor():
+    disks = hit_corridor(0.0, 0.0, 0.0)
+    pts = [(0.2, 0.0), (0.5, 0.0), (1.6, 0.0)]
+    out = skip_blocked(pts, disks)
+    assert abs(out[0][0] - 1.6) < 1e-9, out
+
+
+def test_plan_refuses_goal_in_disk():
+    grid = OccupancyGrid(size_m=8.0, resolution=0.05)
+    path = plan(grid, (0.0, 0.0), (0.6, 0.0), extra_disks=[(0.6, 0.0, 0.30)])
+    assert path == []
+
+
+def test_splice_does_not_reenter_hit():
+    grid = OccupancyGrid(size_m=8.0, resolution=0.05)
+    odo = FakeOdo(-0.2, 0.35)
+    rest = [(0.2, 0.0), (0.5, 0.0), (0.8, 0.0), (1.6, 0.0)]
+    disks = hit_corridor(0.0, 0.0, 0.0)
+    path = splice_path(grid, odo, rest, disks)
+    assert len(path) >= 2
+    assert path[-1][0] > 1.2
+    for p in path:
+        for d in disks:
+            gap = math.hypot(p[0] - d[0], p[1] - d[1]) - d[2]
+            assert gap > -0.05, (p, d, gap)
+
+
 def test_splice_skips_hit():
     grid = OccupancyGrid(size_m=8.0, resolution=0.05)
     odo = FakeOdo(0.0, 0.4)
@@ -90,6 +124,9 @@ if __name__ == "__main__":
     test_choose_path_side_not_the_more_open_room()
     test_choose_path_side_left()
     test_skip_near_hit()
+    test_skip_blocked_drops_corridor()
     test_plan_goes_around_virtual_disk()
+    test_plan_refuses_goal_in_disk()
     test_splice_skips_hit()
+    test_splice_does_not_reenter_hit()
     print("recover_test ok")
