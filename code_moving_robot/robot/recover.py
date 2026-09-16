@@ -96,7 +96,7 @@ def dist_to_disks(xy, disks):
 
 def hit_corridor(x, y, yaw, ahead_m=HIT_AHEAD_M, depth_m=HIT_DEPTH_M, radius=VIRTUAL_BLOCK_M):
     """실패한 진행 방향 앞을 여러 원으로 막아 같은 통로로 안 돌아가게 한다."""
-    n = 4
+    n = 3
     out = []
     span = max(depth_m - ahead_m, 0.05)
     for i in range(n):
@@ -113,7 +113,7 @@ def hit_corridor(x, y, yaw, ahead_m=HIT_AHEAD_M, depth_m=HIT_DEPTH_M, radius=VIR
 
 def choose_detour(scan, x, y, yaw, rest, clear_m=RECOVER_CLEAR_M, disks=None):
     """남은 경로에 가깝되, 기억한 장애물 쪽으로는 안 간다."""
-    min_go = min(0.32, clear_m)
+    min_go = min(0.20, clear_m)
     rest = list(rest or [])
     left = side_clearance(scan, 1)
     right = side_clearance(scan, -1)
@@ -124,8 +124,8 @@ def choose_detour(scan, x, y, yaw, rest, clear_m=RECOVER_CLEAR_M, disks=None):
             continue
         hx, hy, tyaw = hop_pose(x, y, yaw, side, RECOVER_TURN_RAD, RECOVER_SIDE_M)
         look = (
-            hx + 0.50 * math.cos(tyaw),
-            hy + 0.50 * math.sin(tyaw),
+            hx + 0.28 * math.cos(tyaw),
+            hy + 0.28 * math.sin(tyaw),
         )
         d_disk = dist_to_disks(look, disks)
         d_land = dist_to_disks((hx, hy), disks)
@@ -147,6 +147,8 @@ def choose_detour(scan, x, y, yaw, rest, clear_m=RECOVER_CLEAR_M, disks=None):
         if best_score is None or score < best_score:
             best_score = score
             best_side = side
+    if best_side == 0 and max(left, right) >= 0.16:
+        best_side = 1 if left >= right else -1
     return best_side, left, right
 
 
@@ -188,7 +190,7 @@ def point_in_disks(p, disks, pad=0.18):
     return False
 
 
-def skip_blocked(points, disks, pad=0.18):
+def skip_blocked(points, disks, pad=0.10):
     """기억한 장애물 안·바로 앞 점은 버린다. 같은 방향으로 다시 붙지 않게."""
     if not points:
         return []
@@ -260,6 +262,8 @@ class Recoverer:
         self._target_yaw = 0.0
         self._target = None
         self._rest = []
+        self._turn_rad = RECOVER_TURN_RAD
+        self._hop_m = RECOVER_SIDE_M
         self.log = None
 
     def active(self):
@@ -353,12 +357,17 @@ class Recoverer:
                 )
             self.side = side
             name = "왼쪽" if side > 0 else "오른쪽"
-            self._target_yaw = wrap_angle(odo.yaw + side * RECOVER_TURN_RAD)
+            self._turn_rad = RECOVER_TURN_RAD
+            self._hop_m = RECOVER_SIDE_M
+            if min(left, right) < 0.35:
+                self._turn_rad = min(self._turn_rad, 0.32)
+                self._hop_m = min(self._hop_m, 0.16)
+            self._target_yaw = wrap_angle(odo.yaw + side * self._turn_rad)
             self.state = "turn"
             self._t0 = now
             self.log = (
                 f"{name} 우회(경로쪽)  L={left:.2f}m R={right:.2f}m  "
-                f"목표각 {math.degrees(self._target_yaw):.0f}°"
+                f"각 {math.degrees(self._turn_rad):.0f}° 옆 {self._hop_m:.2f}m"
             )
             return None
         if now - self._t0 >= RECOVER_WAIT_S:
@@ -389,14 +398,14 @@ class Recoverer:
 
     def _hop(self, drive, odo, scan, now):
         gone = math.hypot(odo.x - self._hop_from[0], odo.y - self._hop_from[1])
-        if gone >= RECOVER_SIDE_M:
+        if gone >= self._hop_m:
             drive.stop(odo)
             self.state = "idle"
             self.log = f"우회 {gone:.2f}m. 경로 재연결"
             return "ok"
         if scan:
             half = math.radians(25)
-            if sector_min_range(scan, 0.0, half) < 0.28:
+            if sector_min_range(scan, 0.0, half) < 0.22:
                 drive.stop(odo)
                 self.state = "idle"
                 self.log = f"옆도 막힘. 여기까지 우회 {gone:.2f}m"

@@ -39,7 +39,7 @@ def _inflate(grid, inflate_m, extra_disks=None):
                     if 0 <= rr < n and 0 <= cc < n:
                         blocked.add((rr, cc))
     if extra_disks:
-        pad = max(inflate_m, 0.0)
+        pad = min(max(inflate_m, 0.0), 0.05)
         for disk in extra_disks:
             _add_disk(blocked, grid, disk[0], disk[1], disk[2] + pad)
     return blocked
@@ -66,7 +66,7 @@ def astar(grid, start_xy, goal_xy, inflate_m=INFLATE_M, free_only=False, extra_d
     _clear_around(blocked, start, grid.n)
     _clear_around(blocked, goal, grid.n)
     if extra_disks:
-        pad = max(inflate_m, 0.0)
+        pad = min(max(inflate_m, 0.0), 0.05)
         for disk in extra_disks:
             _add_disk(blocked, grid, disk[0], disk[1], disk[2] + pad)
     if start in blocked:
