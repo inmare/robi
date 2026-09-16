@@ -39,7 +39,7 @@ class Follower:
         want = math.atan2(cur[1] - odo.y, cur[0] - odo.x)
         return wrap_angle(want - odo.yaw)
 
-    def step(self, drive, odo):
+    def step(self, drive, odo, speed=None):
         if self.done():
             drive.stop(odo)
             return True
@@ -56,13 +56,13 @@ class Follower:
         want = math.atan2(dy, dx)
         err = wrap_angle(want - odo.yaw)
         if abs(err) > 0.45:
-            spin = SPIN_SPEED
+            spin = min(SPIN_SPEED, speed if speed is not None else SPIN_SPEED)
             if err > 0:
                 drive.set_speeds(-spin, spin, odo)
             else:
                 drive.set_speeds(spin, -spin, odo)
         else:
-            base = NAV_SPEED
+            base = NAV_SPEED if speed is None else speed
             turn = max(-0.12, min(0.12, 0.2 * err))
             drive.set_speeds(base - turn, base + turn, odo)
         return False

@@ -121,7 +121,7 @@ def match_local(grid, x, y, yaw, points, xy_m=0.10, yaw_rad=0.38):
     return match_scan(grid, x, y, yaw, points, xy_m=xy_m, yaw_rad=yaw_rad)
 
 
-def match_yaw(grid, x, y, points):
+def match_yaw(grid, x, y, points, min_score=MIN_HEADING_SCORE):
     """xy는 고정하고 yaw만 한 바퀴 본다. 주행 중 로컬 매칭 실패용."""
     if grid.occ_n < MIN_OCC:
         return None
@@ -143,7 +143,7 @@ def match_yaw(grid, x, y, points):
         if s is not None and s > best_s:
             best_s = s
             best_yaw = best_yaw + dth
-    if best_s < MIN_HEADING_SCORE:
+    if best_s < min_score:
         return None
     return Match(x, y, best_yaw, best_s)
 

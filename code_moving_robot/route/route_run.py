@@ -20,7 +20,7 @@ from robot.drive import Drive
 from robot.follow import Follower
 from robot.grid import OccupancyGrid
 from robot.lidar import Lidar
-from robot.localize import MIN_OCC, match_heading, match_scan, wrap_angle
+from robot.localize import MIN_OCC, match_heading, match_scan, match_yaw, wrap_angle
 from robot.odometry import Odometry
 from robot.pins import (
     ARRIVE_M,
@@ -91,7 +91,28 @@ class Keys:
         ready, _, _ = select.select([sys.stdin], [], [], timeout)
         if not ready:
             return None
-        return sys.stdin.read(1)
+        ch = sys.stdin.read(1)
+        if ch != "\x1b":
+            return ch
+        ready, _, _ = select.select([sys.stdin], [], [], 0.03)
+        if not ready:
+            return ch
+        mid = sys.stdin.read(1)
+        if mid not in ("[", "O"):
+            return ch
+        ready, _, _ = select.select([sys.stdin], [], [], 0.03)
+        if not ready:
+            return ch
+        end = sys.stdin.read(1)
+        if end == "A":
+            return "up"
+        if end == "B":
+            return "down"
+        if end == "C":
+            return "right"
+        if end == "D":
+            return "left"
+        return ch
 
     def close(self):
         termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old)
@@ -129,7 +150,7 @@ def _xy_dist(a, b):
 
 
 def remaining_targets(odo, start, waypoints, goal):
-    """찍어 둔 점을 앞에서부터 따라간다. 이미 지난 점은 건너뛴다."""
+    """찍어 둔 점을 앞에서부터 따라간다. 지금 자리와 가장 가까운 점부터."""
     here = (odo.x, odo.y)
     near_start = _xy_dist(here, start) <= 0.45
     near_goal = goal is not None and _xy_dist(here, goal) <= 0.45
@@ -138,16 +159,15 @@ def remaining_targets(odo, start, waypoints, goal):
             return [start]
         return []
 
-    seq = list(waypoints)
+    seq = [start]
+    seq.extend(waypoints)
     if goal is not None:
         seq.append(goal)
     seq = [p for p in seq if _xy_dist(here, p) > ARRIVE_M]
     if not seq:
         return []
     nearest_i = min(range(len(seq)), key=lambda i: _xy_dist(here, seq[i]))
-    if nearest_i > 0:
-        seq = seq[nearest_i:]
-    return seq
+    return seq[nearest_i:]
 
 
 def build_path(grid, odo, targets, extra_disks=None):
@@ -182,6 +202,17 @@ def build_path(grid, odo, targets, extra_disks=None):
                 continue
         path.append(nxt)
     return thin_path(path)
+
+
+def apply_motion(drive, odo, motion, speed):
+    if motion == "fwd":
+        drive.set_speeds(speed, speed, odo)
+    elif motion == "back":
+        drive.set_speeds(-speed, -speed, odo)
+    elif motion == "left":
+        drive.set_speeds(-speed, speed, odo)
+    elif motion == "right":
+        drive.set_speeds(speed, -speed, odo)
 
 
 def pose_tuple(odo):
@@ -310,6 +341,76 @@ def collect_scan(lidar, n=4, timeout_s=8.0):
     return best
 
 
+def route_polyline(data):
+    """저장 JSON의 시작·경유·도착을 (x,y,yaw) 리스트로."""
+    pts = []
+    start = data.get("start") or [0.0, 0.0, 0.0]
+    pts.append(
+        (
+            float(start[0]),
+            float(start[1]),
+            float(start[2]) if len(start) > 2 else 0.0,
+        )
+    )
+    for w in data.get("waypoints") or []:
+        yaw = float(w[2]) if len(w) > 2 else pts[-1][2]
+        pts.append((float(w[0]), float(w[1]), yaw))
+    goal = data.get("goal")
+    if goal is not None:
+        yaw = float(goal[2]) if len(goal) > 2 else pts[-1][2]
+        pts.append((float(goal[0]), float(goal[1]), yaw))
+    return pts
+
+
+def densify_route(pts, step_m=0.45, max_n=40):
+    if not pts:
+        return []
+    out = [pts[0]]
+    for x1, y1, yaw1 in pts[1:]:
+        x0, y0, yaw0 = out[-1]
+        dist = math.hypot(x1 - x0, y1 - y0)
+        n = max(1, int(round(dist / step_m)))
+        for k in range(1, n + 1):
+            t = k / n
+            out.append((x0 + t * (x1 - x0), y0 + t * (y1 - y0), yaw1 if k == n else yaw0))
+    if len(out) <= max_n:
+        return out
+    step = len(out) / max_n
+    thin = [out[min(len(out) - 1, int(i * step))] for i in range(max_n)]
+    if thin[-1] != out[-1]:
+        thin[-1] = out[-1]
+    return thin
+
+
+def localize_on_route(grid, scan, data):
+    """스캔을 저장 경로 여러 점에 맞춰 지금 웨이포인트 근처를 찾는다."""
+    samples = densify_route(route_polyline(data))
+    if len(samples) < 2:
+        return None
+    ranked = []
+    for i, (x, y, _yaw) in enumerate(samples):
+        found = match_yaw(grid, x, y, scan, min_score=0.06)
+        if found is None:
+            continue
+        ranked.append((found.score, i, x, y, found))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda row: row[0], reverse=True)
+    best = None
+    best_i = 0
+    for _score, i, x, y, yaw_hit in ranked[:5]:
+        refined = match_heading(grid, x, y, scan, xy_m=0.28, min_score=0.08)
+        cand = refined if refined is not None else yaw_hit
+        if best is None or cand.score > best.score:
+            best = cand
+            best_i = i
+    if best is None:
+        return None
+    n = len(samples)
+    name = f"경로 {best_i + 1}/{n}"
+    return name, best, best_i, n
+
+
 def restore_heading(grid, odo, lidar, data):
     print(c_dim("라이다 켜는 중. 1초 대기..."))
     time.sleep(1.0)
@@ -324,6 +425,9 @@ def restore_heading(grid, odo, lidar, data):
     sx, sy = float(start[0]), float(start[1])
     syaw = float(start[2]) if len(start) > 2 else 0.0
     picks = []
+    route_hit = localize_on_route(grid, points, data)
+    if route_hit is not None:
+        picks.append((route_hit[0], route_hit[1]))
     prior = match_scan(grid, sx, sy, syaw, points, xy_m=0.45, yaw_rad=0.75)
     if prior is not None and prior.score >= 0.10:
         picks.append(("시작점(저장각)", prior))
@@ -342,6 +446,8 @@ def restore_heading(grid, odo, lidar, data):
         print(c_err("이전 지도와 지금 스캔이 안 맞습니다"))
         return False
     best_name, best = max(picks, key=lambda item: item[1].score)
+    if route_hit is not None and route_hit[1].score >= best.score - 0.03:
+        best_name, best = route_hit[0], route_hit[1]
     odo.set_pose(best.x, best.y, best.yaw)
     extra = ""
     if best.ambiguous:
@@ -368,9 +474,9 @@ def mark_list(start, waypoints, goal):
 
 def help_text():
     return (
-        "wasd 이동  스페이스 정지  +/- 속도  k 경로기록 on/off\n"
+        "wasd 이동  스페이스 정지  ↑↓ 속도  k 경로기록 on/off\n"
         "수동: 1 시작  2 경유  3 도착  | 기록은 1초마다, 도착에서 k\n"
-        "m 지도  r 재생  t 수동  l 방향  p 좌표  S 저장  q 종료\n"
+        "m 지도  r 재생  t 수동  l 경로위치  p 좌표  S 저장  q 종료\n"
         "자동: 자홍=위치  노랑=정체/회복(후진·좌우·우회)"
     )
 
@@ -442,6 +548,7 @@ def main():
         lidar = Lidar()
         loaded = load_session()
         speed = TELEOP_SPEED
+        motion = None
         mode = "teleop"
         follower = None
         last_status = 0.0
@@ -621,7 +728,7 @@ def main():
                                         f"남은 {follower.remaining_m(odo):.2f}m"
                                     )
                                 )
-                        follower.step(drive, odo)
+                        follower.step(drive, odo, speed)
 
             ch = keys.read(0.0 if mode == "auto" else 0.02)
             if ch is None:
@@ -654,32 +761,49 @@ def main():
                 mode = "teleop"
                 follower = None
                 recover.abort()
+                motion = None
                 drive.stop(odo)
                 print(c_info("수동"))
                 continue
-            if mode == "auto" and ch not in ("m", "p"):
+            if mode == "auto" and ch not in (
+                "m",
+                "p",
+                "up",
+                "down",
+                "+",
+                "-",
+                "=",
+            ):
                 mode = "teleop"
                 follower = None
                 recover.abort()
                 drive.stop(odo)
+                motion = None
                 print(c_warn("키 입력 → 수동"))
 
             if ch == "w":
+                motion = "fwd"
                 drive.set_speeds(speed, speed, odo)
             elif ch == "s":
+                motion = "back"
                 drive.set_speeds(-speed, -speed, odo)
             elif ch == "a":
+                motion = "left"
                 drive.set_speeds(-speed, speed, odo)
             elif ch == "d":
+                motion = "right"
                 drive.set_speeds(speed, -speed, odo)
             elif ch == " ":
+                motion = None
                 drive.stop(odo)
-            elif ch == "+":
-                speed = min(0.92, speed + 0.04)
-                print(c_dim(f"속도 {speed:.2f}"))
-            elif ch == "-":
-                speed = max(0.42, speed - 0.04)
-                print(c_dim(f"속도 {speed:.2f}"))
+            elif ch in ("up", "+", "="):
+                speed = min(0.95, speed + 0.08)
+                apply_motion(drive, odo, motion, speed)
+                print(c_info(f"속도 {speed:.2f}"))
+            elif ch in ("down", "-", "_"):
+                speed = max(0.35, speed - 0.08)
+                apply_motion(drive, odo, motion, speed)
+                print(c_info(f"속도 {speed:.2f}"))
             elif ch in ("k", "K"):
                 if recording:
                     waypoints, goal = seal_goal(odo, waypoints, goal)
@@ -718,16 +842,33 @@ def main():
                 if not scan:
                     print(c_warn("스캔 없음"))
                     continue
-                found = match_heading(grid, odo.x, odo.y, scan)
+                data_now = {
+                    "start": start,
+                    "waypoints": waypoints,
+                    "goal": goal,
+                }
+                found = None
+                name = "지금 자리"
+                if waypoints or goal:
+                    route_hit = localize_on_route(grid, scan, data_now)
+                    if route_hit is not None:
+                        found = route_hit[1]
+                        name = route_hit[0]
+                local = match_heading(grid, odo.x, odo.y, scan, min_score=0.10)
+                if local is not None and (
+                    found is None or local.score > found.score + 0.03
+                ):
+                    found = local
+                    name = "지금 자리"
                 if found is None:
-                    print(c_err("방향 맞춤 실패. 지도를 더 그리거나 시작 칸에 두세요"))
+                    print(c_err("방향 맞춤 실패. 지도를 더 그리거나 경로 위에 두세요"))
                     continue
                 odo.set_pose(found.x, found.y, found.yaw)
                 slam.seed(odo)
                 extra = " (애매)" if found.ambiguous else ""
                 print(
                     c_ok(
-                        f"방향 맞춤 x={found.x:.2f} y={found.y:.2f} "
+                        f"{name} 맞춤 x={found.x:.2f} y={found.y:.2f} "
                         f"yaw={math.degrees(found.yaw):.0f}° "
                         f"score={found.score:.2f}{extra}"
                     )
