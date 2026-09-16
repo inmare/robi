@@ -83,34 +83,54 @@ def thin_path(points, step_m=0.18):
     return out
 
 
+def _xy_dist(a, b):
+    return math.hypot(a[0] - b[0], a[1] - b[1])
+
+
 def remaining_targets(odo, start, waypoints, goal):
-    seq = []
-    near_start = math.hypot(odo.x - start[0], odo.y - start[1]) <= 0.45
-    if not near_start:
-        seq.append(start)
-    seq.extend(waypoints)
+    """찍어 둔 점을 앞에서부터 따라간다. 이미 지난 점은 건너뛴다."""
+    here = (odo.x, odo.y)
+    near_start = _xy_dist(here, start) <= 0.45
+    near_goal = goal is not None and _xy_dist(here, goal) <= 0.45
+    if near_goal and not near_start:
+        if _xy_dist(here, start) > ARRIVE_M:
+            return [start]
+        return []
+
+    seq = list(waypoints)
     if goal is not None:
         seq.append(goal)
-    out = []
-    for p in seq:
-        if math.hypot(odo.x - p[0], odo.y - p[1]) > ARRIVE_M:
-            out.append(p)
-    return out
+    seq = [p for p in seq if _xy_dist(here, p) > ARRIVE_M]
+    if not seq:
+        return []
+    nearest_i = min(range(len(seq)), key=lambda i: _xy_dist(here, seq[i]))
+    if nearest_i > 0:
+        seq = seq[nearest_i:]
+    return seq
 
 
 def build_path(grid, odo, targets):
+    """기록점은 이미 지나온 길이므로 짧은 구간은 그대로 잇는다.
+
+    맵의 # 조각·미지 칸 때문에 A*가 전부 실패하던 것을 막는다.
+    실제 장애물은 주행 중 전방 라이다가 멈춘다.
+    """
     if not targets:
         return []
-    path = []
-    cur = (odo.x, odo.y)
-    for tgt in targets:
-        chunk = plan(grid, cur, (tgt[0], tgt[1]))
-        if len(chunk) < 2:
-            return []
-        if path:
-            chunk = chunk[1:]
-        path.extend(chunk)
-        cur = (tgt[0], tgt[1])
+    pts = [(odo.x, odo.y)] + [(t[0], t[1]) for t in targets]
+    path = [pts[0]]
+    hop_m = 1.6
+    for nxt in pts[1:]:
+        cur = path[-1]
+        dist = _xy_dist(cur, nxt)
+        if dist < hop_m:
+            path.append(nxt)
+            continue
+        chunk = plan(grid, cur, nxt)
+        if len(chunk) >= 2:
+            path.extend(chunk[1:])
+        else:
+            path.append(nxt)
     return thin_path(path)
 
 
@@ -466,14 +486,11 @@ def main():
                 print("다음 목표", " → ".join(bits))
                 path = build_path(grid, odo, targets)
                 if len(path) < 2:
-                    print(
-                        "경로 없음. 벽(#)이 길을 막습니다. "
-                        "가운데를 더 비우며 그린 뒤 r. 직선으로 벽을 뚫지 않습니다"
-                    )
+                    print("따라갈 점이 없습니다")
                     continue
                 follower = Follower(path)
                 mode = "auto"
-                print(f"자율주행 점 {len(path)}개. 아무 키나 누르면 수동")
+                print(f"경로 재생 점 {len(path)}개. 아무 키나 누르면 수동")
             elif ch in ("\n", "\r"):
                 pass
             else:

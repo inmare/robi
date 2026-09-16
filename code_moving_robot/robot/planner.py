@@ -24,7 +24,7 @@ def _inflate(grid, inflate_m):
     return blocked
 
 
-def _clear_around(blocked, cell, n, radius_cells=3):
+def _clear_around(blocked, cell, n, radius_cells=6):
     if cell is None:
         return
     row, col = cell
@@ -88,17 +88,10 @@ def astar(grid, start_xy, goal_xy, inflate_m=INFLATE_M, free_only=False):
 
 
 def plan(grid, start_xy, goal_xy):
-    """부풀리기를 줄여가며 길을 찾는다. 없으면 빈 리스트 (직선 관통 없음)."""
-    for inflate_m, free_only in (
-        (INFLATE_M, True),
-        (0.10, True),
-        (0.06, True),
-        (INFLATE_M, False),
-        (0.08, False),
-        (0.0, False),
-    ):
+    """부풀리기를 줄여가며 길을 찾는다. 미지 칸은 벽으로 보지 않는다."""
+    for inflate_m in (INFLATE_M, 0.08, 0.0):
         path = astar(
-            grid, start_xy, goal_xy, inflate_m=inflate_m, free_only=free_only
+            grid, start_xy, goal_xy, inflate_m=inflate_m, free_only=False
         )
         if len(path) >= 2:
             return path
