@@ -1,7 +1,7 @@
 """바닥 장애물·라이다 걸림 회복.
 
 스캔 평면 아래 물건은 맵에 안 그려진다. DWA/TEB도 스캔이 끊기면 못 쓴다.
-그래서 Bug 식으로 후진 → 좌우 여유 → 옆 이동 후, 부딪힌 자리를
+그래서 Bug 식으로 짧게 후진 → 빈 옆으로 이동한 뒤, 부딪힌 자리를
 extra_disk로 남기고 A*로 남은 점에 다시 붙는다.
 """
 
@@ -30,6 +30,8 @@ from robot.pins import (
     SURVEY_RAD,
     SURVEY_TURN_S,
     VIRTUAL_BLOCK_M,
+    YAW_STALL_RAD,
+    YAW_STALL_S,
 )
 from robot.planner import plan
 
@@ -79,13 +81,10 @@ def hop_pose(x, y, yaw, side, turn_rad, hop_m):
 
 
 def side_clearance(points, side):
-    """90° 옆 + 실제 회전하는 앞옆(약 55°). 옆만 보면 앞옆 벽을 놓친다."""
-    half = math.radians(RECOVER_SECTOR_DEG)
-    side_c = sector_min_range(points, side * math.pi / 2, half)
-    front_c = sector_min_range(
-        points, side * math.radians(55), math.radians(38)
+    """90° 옆 여유. 앞옆(55°)까지 min 하면, 앞에 선 사람 때문에 옆 빈길을 놓친다."""
+    return sector_min_range(
+        points, side * math.pi / 2, math.radians(RECOVER_SECTOR_DEG)
     )
-    return min(side_c, front_c)
 
 
 def dist_to_disks(xy, disks):
@@ -118,8 +117,8 @@ def hit_corridor(x, y, yaw, ahead_m=HIT_AHEAD_M, depth_m=HIT_DEPTH_M, radius=VIR
 
 
 def choose_detour(scan, x, y, yaw, rest, clear_m=RECOVER_CLEAR_M, disks=None):
-    """남은 경로에 가깝되, 기억한 장애물 쪽으로는 안 간다."""
-    min_go = min(0.20, clear_m)
+    """빈 쪽으로 먼저 빠진다. 경로에 가까운 쪽이 막혀 있으면 넓은 쪽을 쓴다."""
+    min_go = min(0.18, clear_m)
     rest = list(rest or [])
     left = side_clearance(scan, 1)
     right = side_clearance(scan, -1)
@@ -145,10 +144,10 @@ def choose_detour(scan, x, y, yaw, rest, clear_m=RECOVER_CLEAR_M, disks=None):
             d_path = 0.0
             turn_after = 0.0
         score = (
-            d_path
-            + 0.30 * turn_after
-            - 0.06 * min(cl, 1.2)
-            - 0.85 * min(max(d_disk, -0.2), 1.6)
+            -1.20 * min(cl, 2.5)
+            + 0.20 * d_path
+            + 0.12 * turn_after
+            - 0.70 * min(max(d_disk, -0.2), 1.6)
         )
         if best_score is None or score < best_score:
             best_score = score
@@ -347,6 +346,8 @@ class Recoverer:
         self._survey_phase = 0
         self._survey_targets = []
         self._grid = None
+        self._spin_yaw = None
+        self._spin_move_t = 0.0
         self.log = None
 
     def active(self):
@@ -387,6 +388,53 @@ class Recoverer:
         self.disks.extend(hit_corridor(odo.x, odo.y, odo.yaw))
         self.log = f"후진 {RECOVER_BACK_M:.2f}m ({reason})"
 
+    def _begin_spin(self, odo, now):
+        self._spin_yaw = odo.yaw
+        self._spin_move_t = now
+
+    def _spin_stuck(self, odo, now, scan=None):
+        """회전에 몸체가 걸리면 yaw가 안 변한다. 그때는 더 돌리지 않는다."""
+        if self._spin_yaw is None:
+            self._begin_spin(odo, now)
+            return False
+        moved = abs(wrap_angle(odo.yaw - self._spin_yaw))
+        if moved >= YAW_STALL_RAD:
+            self._spin_yaw = odo.yaw
+            self._spin_move_t = now
+            return False
+        if scan and sector_min_range(scan, 0.0, math.radians(22)) < 0.16:
+            return True
+        return now - self._spin_move_t >= YAW_STALL_S
+
+    def _go_open_side(self, drive, odo, scan, now):
+        rest = skip_blocked(self._rest, self.disks)
+        side, left, right = choose_detour(
+            scan or [], odo.x, odo.y, odo.yaw, rest, disks=self.disks
+        )
+        if side == 0:
+            drive.stop(odo)
+            self.state = "idle"
+            self.log = (
+                f"빈 옆길 없음 L={left:.2f} R={right:.2f}. 여기서 재연결"
+            )
+            return "ok"
+        self.side = side
+        name = "왼쪽" if side > 0 else "오른쪽"
+        self._turn_rad = RECOVER_TURN_RAD
+        self._hop_m = RECOVER_SIDE_M
+        if min(left, right) < 0.35:
+            self._turn_rad = min(self._turn_rad, 0.32)
+            self._hop_m = min(self._hop_m, 0.18)
+        self._target_yaw = wrap_angle(odo.yaw + side * self._turn_rad)
+        self.state = "turn"
+        self._t0 = now
+        self._begin_spin(odo, now)
+        self.log = (
+            f"{name} 빈길로  L={left:.2f}m R={right:.2f}m  "
+            f"각 {math.degrees(self._turn_rad):.0f}° 옆 {self._hop_m:.2f}m"
+        )
+        return None
+
     def hit_xy(self):
         if not self.disks:
             return self._stuck[0], self._stuck[1]
@@ -405,7 +453,7 @@ class Recoverer:
         if self.state == "survey":
             return self._survey(drive, odo, scan, now)
         if self.state == "turn":
-            return self._turn(drive, odo, now)
+            return self._turn(drive, odo, now, scan)
         if self.state == "hop":
             return self._hop(drive, odo, scan, now)
         return None
@@ -440,17 +488,7 @@ class Recoverer:
         drive.stop(odo)
         if scan and len(scan) >= 12:
             self.ingest_scan(odo, scan, self._grid)
-            self._survey_phase = 0
-            self._survey_targets = [
-                wrap_angle(odo.yaw + SURVEY_RAD),
-                wrap_angle(odo.yaw - SURVEY_RAD),
-                wrap_angle(odo.yaw),
-            ]
-            self._target_yaw = self._survey_targets[0]
-            self.state = "survey"
-            self._t0 = now
-            self.log = "주변 수색 왼쪽"
-            return None
+            return self._go_open_side(drive, odo, scan, now)
         if now - self._t0 >= RECOVER_WAIT_S:
             return self._fail(drive, odo, "라이다가 다시 안 돕니다")
         return None
@@ -458,18 +496,16 @@ class Recoverer:
     def _survey(self, drive, odo, scan, now):
         if scan:
             self.ingest_scan(odo, scan, self._grid)
+        if self._spin_stuck(odo, now, scan):
+            drive.stop(odo)
+            self.state = "idle"
+            self.log = "수색 회전 걸림. 여기서 재연결"
+            return "ok"
         err = wrap_angle(self._target_yaw - odo.yaw)
         done = abs(err) < 0.14 or now - self._t0 >= SURVEY_TURN_S
         if done:
             drive.stop(odo)
-            self._survey_phase += 1
-            if self._survey_phase >= len(self._survey_targets):
-                return self._after_survey(drive, odo, scan, now)
-            self._target_yaw = self._survey_targets[self._survey_phase]
-            self._t0 = now
-            names = ("왼쪽", "오른쪽", "정면")
-            self.log = f"주변 수색 {names[min(self._survey_phase, 2)]}"
-            return None
+            return self._go_open_side(drive, odo, scan, now)
         spin = SPIN_SPEED * 0.85
         if err > 0:
             drive.set_speeds(-spin, spin, odo)
@@ -478,48 +514,27 @@ class Recoverer:
         return None
 
     def _after_survey(self, drive, odo, scan, now):
-        rest = skip_blocked(self._rest, self.disks)
-        side, left, right = choose_detour(
-            scan or [], odo.x, odo.y, odo.yaw, rest, disks=self.disks
-        )
-        if side == 0:
+        return self._go_open_side(drive, odo, scan, now)
+
+    def _turn(self, drive, odo, now, scan=None):
+        if self._spin_stuck(odo, now, scan):
             drive.stop(odo)
             self.state = "idle"
-            self.log = (
-                f"수색 끝. 좌우 좁음 L={left:.2f} R={right:.2f}. 경로 재연결"
-            )
+            self.log = "우회 회전 걸림. 여기서 재연결"
             return "ok"
-        self.side = side
-        name = "왼쪽" if side > 0 else "오른쪽"
-        self._turn_rad = RECOVER_TURN_RAD
-        self._hop_m = RECOVER_SIDE_M
-        if min(left, right) < 0.35:
-            self._turn_rad = min(self._turn_rad, 0.32)
-            self._hop_m = min(self._hop_m, 0.16)
-        self._target_yaw = wrap_angle(odo.yaw + side * self._turn_rad)
-        self.state = "turn"
-        self._t0 = now
-        self.log = (
-            f"{name} 우회(경로쪽)  L={left:.2f}m R={right:.2f}m  "
-            f"각 {math.degrees(self._turn_rad):.0f}° 옆 {self._hop_m:.2f}m"
-        )
-        return None
-
-    def _turn(self, drive, odo, now):
         err = wrap_angle(self._target_yaw - odo.yaw)
         if abs(err) < 0.12:
             drive.stop(odo)
             self.state = "hop"
             self._t0 = now
             self._hop_from = (odo.x, odo.y)
-            self.log = "회전 끝. 옆으로 이동"
+            self.log = "회전 끝. 빈길로 이동"
             return None
         if now - self._t0 >= RECOVER_TURN_S:
-            self.state = "hop"
-            self._t0 = now
-            self._hop_from = (odo.x, odo.y)
-            self.log = "회전 시간 초과. 옆으로 이동"
-            return None
+            drive.stop(odo)
+            self.state = "idle"
+            self.log = "회전 시간 초과. 여기서 재연결"
+            return "ok"
         spin = SPIN_SPEED
         if err > 0:
             drive.set_speeds(-spin, spin, odo)

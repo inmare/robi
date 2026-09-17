@@ -126,23 +126,43 @@ def help_text():
     )
 
 
-def snap_to_route(grid, odo, slam, scan, start, waypoints, goal):
+def snap_to_route(grid, odo, slam, scan, start, waypoints, goal, prefer_here=True):
     if not scan:
         return None
     outbound = recorded_route(start, waypoints, goal)
-    picks = []
+    local = match_scan(
+        grid, odo.x, odo.y, odo.yaw, scan, xy_m=0.40, yaw_rad=0.70
+    )
+    if local is None or local.score < 0.08:
+        local = match_heading(grid, odo.x, odo.y, scan, xy_m=0.45, min_score=0.08)
+    route = None
     if len(outbound) >= 1:
-        found = match_along_route(
+        route = match_along_route(
             grid, scan, outbound, lateral_m=ROUTE_LATERAL_M, min_score=0.07
         )
-        if found is not None:
-            picks.append(("경로", found))
-    local = match_heading(grid, odo.x, odo.y, scan, xy_m=0.45, min_score=0.10)
-    if local is not None:
-        picks.append(("지금 자리", local))
-    if not picks:
+    best_name, best = None, None
+    if prefer_here and local is not None:
+        if route is None:
+            best_name, best = "지금 자리", local
+        else:
+            jump = math.hypot(route.x - odo.x, route.y - odo.y)
+            if jump > 0.65 and local.score >= route.score - 0.10:
+                best_name, best = "지금 자리", local
+            elif route.score > local.score + 0.14 and jump < 1.0:
+                best_name, best = "경로", route
+            else:
+                best_name, best = "지금 자리", local
+    else:
+        picks = []
+        if route is not None:
+            picks.append(("경로", route))
+        if local is not None:
+            picks.append(("지금 자리", local))
+        if not picks:
+            return None
+        best_name, best = max(picks, key=lambda item: item[1].score)
+    if best is None:
         return None
-    best_name, best = max(picks, key=lambda item: item[1].score)
     odo.set_pose(best.x, best.y, best.yaw)
     slam.seed(odo)
     return best_name, best
@@ -206,7 +226,7 @@ def auto_progress_line(odo, follower, start, waypoints, goal, stuck_s=0.0, going
     phase = "복귀" if going_home else "왕복"
     if cur is None:
         return f"[auto] {phase} 도착"
-    i, n = route_progress(cur, start, waypoints, goal)
+    i, n = route_progress((odo.x, odo.y), start, waypoints, goal)
     dist = math.hypot(cur[0] - odo.x, cur[1] - odo.y)
     left = follower.remaining_m(odo)
     err_deg = math.degrees(follower.heading_err(odo))
@@ -269,7 +289,7 @@ def start_round_trip(grid, odo, slam, lidar, start, waypoints, goal, recover, la
     if len(path) < 2:
         print(c_err("따라갈 점이 없습니다"))
         return None
-    i, n = route_progress(path[0], start, waypoints, goal)
+    i, n = route_progress((odo.x, odo.y), start, waypoints, goal)
     print(
         c_auto(
             f"왕복 재생 {i}/{n}. "
@@ -510,7 +530,7 @@ def run_drive(
                             cur = follower.current()
                             if cur is not None:
                                 i, n = route_progress(
-                                    cur, start, waypoints, goal
+                                    (odo.x, odo.y), start, waypoints, goal
                                 )
                                 home = trip_going_home(
                                     odo, start, waypoints, goal, follower
@@ -741,9 +761,16 @@ def run_drive(
         print(c_warn("Ctrl+C"))
     finally:
         if drive is not None:
-            drive.disable()
+            try:
+                drive.stop(odo)
+            except Exception:
+                drive.disable()
         if lidar is not None:
             lidar.close()
+        if odo is not None:
+            odo.close()
+        if drive is not None:
+            drive.close()
         keys.close()
         print(c_dim("라이다·모터 OFF"))
 

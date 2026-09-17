@@ -63,3 +63,15 @@ class Odometry:
         self.yaw = 0.0
         self.left_count = 0
         self.right_count = 0
+
+    def close(self):
+        for attr in ("left_hall", "right_hall"):
+            dev = getattr(self, attr, None)
+            if dev is None:
+                continue
+            try:
+                dev.when_activated = None
+                dev.close()
+            except Exception:
+                pass
+            setattr(self, attr, None)

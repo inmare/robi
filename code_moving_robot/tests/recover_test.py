@@ -40,8 +40,8 @@ def test_pick_none_when_both_close():
     assert side == 0
 
 
-def test_choose_path_side_not_the_more_open_room():
-    """왼쪽이 더 넓어도 남은 경로가 오른쪽이면 오른쪽으로."""
+def test_choose_open_side_even_if_path_is_other_way():
+    """경로가 오른쪽이어도 왼쪽이 비어 있으면 왼쪽으로."""
     scan = [
         (math.pi / 2, 2.5),
         (math.radians(55), 2.4),
@@ -50,10 +50,10 @@ def test_choose_path_side_not_the_more_open_room():
     ]
     rest = [(1.0, -0.25), (2.0, -0.45)]
     side, left, right = choose_detour(scan, 0.0, 0.0, 0.0, rest)
-    assert side == -1, (side, left, right)
+    assert side == 1, (side, left, right)
 
 
-def test_choose_path_side_left():
+def test_choose_open_side_right():
     scan = [
         (math.pi / 2, 0.70),
         (math.radians(55), 0.72),
@@ -62,7 +62,7 @@ def test_choose_path_side_left():
     ]
     rest = [(1.0, 0.25), (2.0, 0.45)]
     side, left, right = choose_detour(scan, 0.0, 0.0, 0.0, rest)
-    assert side == 1, (side, left, right)
+    assert side == -1, (side, left, right)
 
 
 def test_skip_near_hit():
@@ -144,8 +144,8 @@ def test_rejoin_goes_around_new_disk():
 if __name__ == "__main__":
     test_pick_right_when_left_blocked()
     test_pick_none_when_both_close()
-    test_choose_path_side_not_the_more_open_room()
-    test_choose_path_side_left()
+    test_choose_open_side_even_if_path_is_other_way()
+    test_choose_open_side_right()
     test_skip_near_hit()
     test_skip_blocked_drops_corridor()
     test_plan_goes_around_virtual_disk()

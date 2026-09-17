@@ -29,11 +29,13 @@ class Wheel:
         self.ren.on()
         self.len.on()
 
-    def disable(self):
-        self.rpwm.value = 0
-        self.lpwm.value = 0
-        self.ren.off()
-        self.len.off()
+    def close(self):
+        self.disable()
+        for dev in (self.rpwm, self.lpwm, self.ren, self.len):
+            try:
+                dev.close()
+            except Exception:
+                pass
 
     def drive(self, speed):
         if speed > 1:
@@ -73,6 +75,11 @@ class Drive:
     def disable(self):
         self.left.disable()
         self.right.disable()
+
+    def close(self):
+        self.disable()
+        self.left.close()
+        self.right.close()
 
     def set_speeds(self, left, right, odo=None):
         self.left.drive(left)
