@@ -4,7 +4,7 @@
 #include <Arduino.h>
 
 // X·Z 바꾼 상태. 푸셔 4핀은 X 칸. STEP D2, DIR D5
-AccelStepper pusher(AccelStepper::DRIVER, 2, 5);
+AccelStepper pusher(AccelStepper::DRIVER, PUSHER_STEP_PIN, PUSHER_DIR_PIN);
 
 const int JOG_STEPS = 400;
 
@@ -58,8 +58,8 @@ void setup() {
   pinMode(8, OUTPUT);
   digitalWrite(8, LOW);
 
-  pusher.setMaxSpeed(550);
-  pusher.setAcceleration(220);
+  pusher.setMaxSpeed(380);
+  pusher.setAcceleration(150);
   lastLimitMask = limitMask();
 
   Serial.println("ready");

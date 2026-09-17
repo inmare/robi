@@ -4,18 +4,18 @@
 STEP·DIR·EN은 쉴드가 이미 이어 줌. 모터·센서·스위치 선은 쉴드 헤더에 바로 꽂음.
 
 모터는 X·Z만 씀.  
-코드 `AccelStepper lift(AccelStepper::DRIVER, 2, 5)` = 쉴드 X축.  
-푸셔는 `AccelStepper pusher(AccelStepper::DRIVER, 4, 7)` = 쉴드 Z축.  
-Enable은 D8, LOW면 켜짐.
+리프트 4핀은 쉴드 **Z**. 코드 `AccelStepper lift(..., 4, 7)`.  
+푸셔 4핀은 쉴드 **X**. 코드 `AccelStepper pusher(..., 2, 5)`.  
+원래 실크와 X·Z가 반대다. Enable은 D8, LOW면 켜짐.
 
 ESP8266을 붙여도 위 모터·리미트·I2C 핀은 그대로다.  
 우노를 ESP로 바꾸지 말 것. ESP-01은 쉴드 `Hold`/`Resume`에만 전선으로 붙인다.
 
 | 쉴드에서 꽂는 곳 | 아두이노 | 역할 |
 |---|---|---|
-| X 모터 4핀 | D2 STEP, D5 DIR | 리프트 KH42JM2-901 |
+| X 모터 4핀 | D2 STEP, D5 DIR | 푸셔 17HS4401 (X·Z 바꿔 꽂음. test_pusher_motor) |
 | Y 모터 4핀 | D3 STEP, D6 DIR | 안 씀 |
-| Z 모터 4핀 | D4 STEP, D7 DIR | 푸셔 17HS4401 |
+| Z 모터 4핀 | D4 STEP, D7 DIR | 리프트 KH42JM2-901 (test_lift_motor) |
 | A 모터 4핀 | D12 STEP, D13 DIR | 안 씀 |
 | (공통, 전선 없음) | D8 EN | 드라이버 4개 같이. LOW=켜짐 |
 | END STOPS `X-` | D9 | 리프트 하단 리미트 |
@@ -40,12 +40,12 @@ USB는 우노·쉴드 로직만. 모터 12V를 VIN에 넣지 말 것. D0/D1은 U
   D10  END STOPS Y-  리프트 상단 리미트
    D9  END STOPS X-  리프트 하단 리미트
    D8  EN (LOW=켜짐)
-   D7  Z축 DIR  푸셔
+   D7  Z축 DIR  리프트
    D6  Y축 DIR (안 씀)
-   D5  X축 DIR  리프트
-   D4  Z축 STEP 푸셔
+   D5  X축 DIR  푸셔
+   D4  Z축 STEP 리프트
    D3  Y축 STEP (안 씀)
-   D2  X축 STEP 리프트
+   D2  X축 STEP 푸셔
    D1  TX 꽂지 말 것
    D0  RX 꽂지 말 것
   A0   Abort    푸셔 전진 리미트
@@ -146,13 +146,13 @@ pio device monitor -b 115200
 
 드라이버는 이미 소켓에 있음. STEP/DIR/VDD/GND/RESET/SLEEP은 안 건드림.
 
-리프트 = X 자리, 푸셔 = Z 자리. Y·A는 꽂혀 있어도 모터 선만 안 꽂으면 됨.
+리프트 = Z 자리, 푸셔 = X 자리. Y·A는 꽂혀 있어도 모터 선만 안 꽂으면 됨.
 
 ## 모터 선 (X / Z 옆 4핀)
 
 실크는 `1A 1B 2A 2B` 또는 `A+ A- B+ B-`.
 
-| 쉴드 핀 | KH42JM2-901 (X, 리프트) | 17HS4401 (Z, 푸셔) |
+| 쉴드 핀 | 17HS4401 (X, 푸셔) | KH42JM2-901 (Z, 리프트) |
 |---|---|---|
 | 1A | 코일 1 한쪽 | 코일 1 한쪽 |
 | 1B | 코일 1 다른쪽 | 코일 1 다른쪽 |

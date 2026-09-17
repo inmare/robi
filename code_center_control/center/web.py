@@ -19,11 +19,23 @@ from center.protocol import CMD_HELP, PRIMITIVES, resolve_cmd
 from center.recipes import RECIPE_HELP, RECIPES
 
 HTML_PATH = Path(__file__).resolve().parent / "static" / "monitor.html"
+_bg_tasks: set[asyncio.Task[Any]] = set()
 
 
-def create_app(hub: Hub, monitor: Monitor, loop: asyncio.AbstractEventLoop) -> Starlette:
+def _spawn(coro: Any) -> None:
+    # 참조를 안 남기면 웹에서 만든 task가 바로 GC되어 명령이 안 나간다.
+    task = asyncio.create_task(coro)
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+
+
+def create_app(hub: Hub, monitor: Monitor, _loop: asyncio.AbstractEventLoop) -> Starlette:
     async def index(_request: Request) -> FileResponse:
-        return FileResponse(HTML_PATH, media_type="text/html; charset=utf-8")
+        return FileResponse(
+            HTML_PATH,
+            media_type="text/html; charset=utf-8",
+            headers={"Cache-Control": "no-store"},
+        )
 
     async def meta(_request: Request) -> JSONResponse:
         return JSONResponse(
@@ -38,18 +50,31 @@ def create_app(hub: Hub, monitor: Monitor, loop: asyncio.AbstractEventLoop) -> S
                         "steps": [step.cmd for step in RECIPES[name]],
                     }
                     for name in RECIPES
+                    if not any(step.cmd.startswith("robot.") for step in RECIPES[name])
                 ],
                 "topics": [
                     "robi/box/cmd",
                     "robi/box/event",
                     "robi/box/status",
+                    "robi/robot/cmd",
+                    "robi/robot/event",
+                    "robi/robot/status",
                 ],
             }
         )
 
     async def snapshot(_request: Request) -> JSONResponse:
         data = monitor.snapshot()
-        data["box"] = [link.name for link in hub.links if link.connected]
+        data["box"] = [
+            link.name
+            for link in hub.links
+            if link.connected and getattr(link, "role", "box") != "robot"
+        ]
+        data["robot_names"] = [
+            link.name
+            for link in hub.links
+            if link.connected and getattr(link, "role", "box") == "robot"
+        ]
         return JSONResponse(data)
 
     async def api_cmd(request: Request) -> JSONResponse:
@@ -60,19 +85,20 @@ def create_app(hub: Hub, monitor: Monitor, loop: asyncio.AbstractEventLoop) -> S
         recipe = str(body.get("recipe", "")).strip()
         cmd = str(body.get("cmd", "")).strip()
         if recipe:
-            loop.create_task(_run_recipe(hub, monitor, recipe))
+            _spawn(_run_recipe(hub, monitor, recipe))
             return JSONResponse({"ok": True})
         resolved = resolve_cmd(cmd)
         if resolved is None:
             return JSONResponse({"ok": False, "error": "unknown"}, status_code=400)
-        loop.create_task(_run_cmd(hub, monitor, resolved))
+        _spawn(_run_cmd(hub, monitor, resolved))
         return JSONResponse({"ok": True})
 
     async def ws_endpoint(ws: WebSocket) -> None:
         await ws.accept()
         monitor.clients.add(ws)
         hello = monitor.snapshot()
-        hello["box"] = [link.name for link in hub.links if link.connected]
+        hello["box"] = [link.name for link in hub.links if getattr(link, "role", "box") != "robot" and link.connected]
+        hello["robot_names"] = [link.name for link in hub.links if getattr(link, "role", "box") == "robot" and link.connected]
         await ws.send_text(json.dumps(hello, ensure_ascii=False))
         try:
             while True:
@@ -85,11 +111,9 @@ def create_app(hub: Hub, monitor: Monitor, loop: asyncio.AbstractEventLoop) -> S
                 if kind == "cmd":
                     resolved = resolve_cmd(str(body.get("cmd", "")))
                     if resolved:
-                        loop.create_task(_run_cmd(hub, monitor, resolved))
+                        _spawn(_run_cmd(hub, monitor, resolved))
                 elif kind == "recipe":
-                    loop.create_task(
-                        _run_recipe(hub, monitor, str(body.get("name", "")))
-                    )
+                    _spawn(_run_recipe(hub, monitor, str(body.get("name", ""))))
         except WebSocketDisconnect:
             pass
         finally:

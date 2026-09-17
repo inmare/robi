@@ -26,6 +26,13 @@ PRIMITIVES = (
     "status",
 )
 
+ROBOT_PRIMITIVES = (
+    "robot.go",
+    "robot.back",
+    "robot.halt",
+    "robot.status",
+)
+
 ALIASES = {
     "u": "lift.up",
     "d": "lift.down",
@@ -39,6 +46,10 @@ ALIASES = {
     "후진": "pusher.back",
     "정지": "halt",
     "상태": "status",
+    "출발": "robot.go",
+    "목적지": "robot.go",
+    "복귀": "robot.back",
+    "로봇정지": "robot.halt",
 }
 
 CMD_HELP = {
@@ -46,8 +57,12 @@ CMD_HELP = {
     "lift.down": "리프트 하강. 하단 리미트에서 정지",
     "pusher.forward": "푸셔 전진. 앞 리미트에서 정지",
     "pusher.back": "푸셔 후진. 뒤 리미트에서 정지",
-    "halt": "지금 동작 즉시 정지",
-    "status": "거리·리미트·바쁨 여부",
+    "halt": "상자·로봇이 있으면 둘 다 즉시 정지",
+    "status": "상자 거리·리미트·바쁨 여부",
+    "robot.go": "기록 경로를 따라 목적지로. 책 옮긴 뒤에 보냄",
+    "robot.back": "같은 길로 원래 자리까지",
+    "robot.halt": "로봇만 정지. 파이 수동 키는 그대로",
+    "robot.status": "로봇 구간 i/n 과 지금 단계",
 }
 
 
@@ -76,7 +91,7 @@ def resolve_cmd(text: str) -> str | None:
         return None
     if name in ALIASES:
         return ALIASES[name]
-    if name in PRIMITIVES:
+    if name in PRIMITIVES or name in ROBOT_PRIMITIVES:
         return name
     return None
 

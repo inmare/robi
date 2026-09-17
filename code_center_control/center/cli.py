@@ -7,13 +7,13 @@ import asyncio
 import sys
 
 from center.hub import Hub
-from center.links import MockLink, SerialLink, TcpClientLink
-from center.protocol import CMD_HELP, Event, resolve_cmd
+from center.links import MockLink, MockRobotLink, SerialLink, TcpClientLink
+from center.protocol import CMD_HELP, Event, PRIMITIVES, ROBOT_PRIMITIVES, parse_line, resolve_cmd
 from center.recipes import RECIPE_HELP, RECIPES
 
 
-def _print(text: str) -> None:
-    print(text, flush=True)
+def _print(text: str, end: str = "\n") -> None:
+    print(text, end=end, flush=True)
 
 
 def show_event(line: str, event: Event | None) -> None:
@@ -22,9 +22,17 @@ def show_event(line: str, event: Event | None) -> None:
             _print(line)
         return
     if event.kind == "H":
-        _print(f"상자 접속 ({event.cmd or 'box'})")
+        who = event.cmd or "box"
+        if who == "robot":
+            _print("로봇 접속")
+        else:
+            _print(f"상자 접속 ({who})")
         return
     if event.kind == "P":
+        if "i" in event.fields and "n" in event.fields:
+            phase = event.fields.get("phase", event.cmd)
+            _print(f"  … {phase} {event.fields['i']}/{event.fields['n']}")
+            return
         mm = event.fields.get("mm", "?")
         _print(f"  … {mm} mm")
         return
@@ -40,16 +48,20 @@ def show_event(line: str, event: Event | None) -> None:
 
 
 def help_text() -> str:
-    lines = ["원자 명령 (나중에 레시피·MQTT에서 그대로 재사용):"]
-    for name, desc in CMD_HELP.items():
-        lines.append(f"  {name:18} {desc}")
+    lines = ["상자 원자 명령:"]
+    for name in PRIMITIVES:
+        lines.append(f"  {name:18} {CMD_HELP[name]}")
+    lines.append("")
+    lines.append("로봇 (파이 키 g/b 와 같음. 웹은 표시만):")
+    for name in ROBOT_PRIMITIVES:
+        lines.append(f"  {name:18} {CMD_HELP[name]}")
     lines.append("")
     lines.append("레시피:")
     for name, desc in RECIPE_HELP.items():
         lines.append(f"  {name:18} {desc}")
     lines.append("")
     lines.append("기타: status, halt, help, quit")
-    lines.append("한글 별명: 상승 하강 전진 후진 정지 상태")
+    lines.append("한글 별명: 상승 하강 전진 후진 정지 상태 출발 복귀")
     return "\n".join(lines)
 
 
@@ -113,6 +125,18 @@ async def tcp_server(hub: Hub, host: str, port: int, on_change=None) -> None:
         peer = writer.get_extra_info("peername")
         addr = f"{peer[0]}:{peer[1]}" if peer else "?"
         link = TcpClientLink(reader, writer, hub.on_line, addr)
+
+        def on_line(line: str) -> None:
+            event = parse_line(line)
+            if event is not None and event.kind == "H":
+                who = event.cmd or "box"
+                link.role = "robot" if who == "robot" else "box"
+                link.name = f"{link.role}:{addr}"
+                if on_change is not None:
+                    on_change()
+            hub.on_line(line)
+
+        link._on_line = on_line
         hub.add_link(link)
         if on_change is not None:
             on_change()
@@ -126,7 +150,7 @@ async def tcp_server(hub: Hub, host: str, port: int, on_change=None) -> None:
     server = await asyncio.start_server(on_client, host, port)
     sockets = server.sockets or []
     where = ", ".join(str(sock.getsockname()) for sock in sockets)
-    _print(f"TCP 대기 {where}  (ESP 브리지가 여기로 붙음)")
+    _print(f"TCP 대기 {where}  (ESP 브리지·라즈베리 파이가 여기로 붙음)")
     async with server:
         await server.serve_forever()
 
@@ -148,19 +172,34 @@ async def async_main(args: argparse.Namespace) -> None:
         monitor = Monitor(loop)
         hub.add_listener(monitor.on_hub)
 
-    def refresh_box() -> None:
-        if monitor is not None:
-            monitor.set_box([link.name for link in hub.links if link.connected])
+    def refresh_links() -> None:
+        if monitor is None:
+            return
+        boxes = []
+        robots = []
+        for link in hub.links:
+            if not link.connected:
+                continue
+            if getattr(link, "role", "box") == "robot":
+                robots.append(link.name)
+            else:
+                boxes.append(link.name)
+        monitor.set_devices(boxes, robots)
 
     if args.mock:
         hub.add_link(MockLink(hub.on_line, loop))
         _print("모의 상자. 보드 없이 명령만 시험")
-        refresh_box()
+        refresh_links()
+
+    if args.mock_robot:
+        hub.add_link(MockRobotLink(hub.on_line, loop))
+        _print("모의 로봇. 경로 1/17 만 시험")
+        refresh_links()
 
     if args.serial:
         hub.add_link(SerialLink(args.serial, args.baud, hub.on_line, loop))
         _print(f"USB {args.serial} {args.baud}")
-        refresh_box()
+        refresh_links()
 
     if args.mqtt:
         from center.mqtt_bus import MqttBus
@@ -171,7 +210,7 @@ async def async_main(args: argparse.Namespace) -> None:
         mqtt = None
 
     if not args.no_tcp:
-        tasks.append(asyncio.create_task(tcp_server(hub, args.host, args.port, refresh_box)))
+        tasks.append(asyncio.create_task(tcp_server(hub, args.host, args.port, refresh_links)))
 
     if monitor is not None:
         import uvicorn
@@ -233,6 +272,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mqtt", help="Mosquitto 주소. 예: 127.0.0.1")
     parser.add_argument("--mqtt-port", type=int, default=1883)
     parser.add_argument("--mock", action="store_true", help="가짜 상자로 명령 시험")
+    parser.add_argument("--mock-robot", action="store_true", help="가짜 로봇으로 go/back 시험")
     parser.add_argument("--step", action="store_true", help="레시피를 한 단계씩 확인")
     parser.add_argument("--web-host", default="0.0.0.0", help="모니터 HTTP 주소")
     parser.add_argument("--web-port", type=int, default=8080)

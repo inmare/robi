@@ -12,7 +12,12 @@ from robot.localize import (
     match_scan,
     wrap_angle,
 )
-from robot.path import recorded_route, round_trip_remaining
+from robot.path import (
+    inbound_points,
+    recorded_route,
+    remaining_from,
+    round_trip_points,
+)
 from robot.pins import (
     ARRIVE_M,
     FRONT_STOP_DEG,
@@ -129,8 +134,8 @@ def help_text():
     return (
         "wasd 이동  스페이스 정지  ↑↓ 속도  k 경로기록 on/off\n"
         "수동: 1 시작  2 경유  3 도착  | 기록은 1초마다, 도착에서 k\n"
-        "m 지도  r 왕복재생  t 수동  l 경로위치  p 좌표  S 저장  q 메뉴\n"
-        "자동: 자홍=위치  노랑=정체/수색/우회. r 은 갔다가 같은 길로 시작점"
+        "g 목적지로  b 원래 자리  r 왕복  t 수동  l 경로위치  p 좌표  S 저장  q 메뉴\n"
+        "중앙 TCP가 붙어 있으면 같은 g/b를 센터에서도 보낼 수 있음. 여기 키가 우선"
     )
 
 
@@ -229,12 +234,17 @@ def route_progress(cur, start, waypoints, goal):
     return i + 1, n
 
 
-def auto_progress_line(odo, follower, start, waypoints, goal, stuck_s=0.0, going_home=False):
+def auto_progress_line(odo, follower, start, waypoints, goal, stuck_s=0.0, going_home=False, auto_leg=None):
     cur = follower.current()
-    phase = "복귀" if going_home else "왕복"
+    if auto_leg == "go":
+        phase = "목적지로"
+    elif auto_leg == "back":
+        phase = "원래 자리로"
+    else:
+        phase = "복귀" if going_home else "왕복"
     if cur is None:
         return f"[auto] {phase} 도착"
-    i, n = route_progress((odo.x, odo.y), start, waypoints, goal)
+    i, n = follower_route_progress(odo, start, waypoints, goal, auto_leg)
     dist = math.hypot(cur[0] - odo.x, cur[1] - odo.y)
     left = follower.remaining_m(odo)
     err_deg = math.degrees(follower.heading_err(odo))
@@ -268,12 +278,45 @@ def trip_going_home(odo, start, waypoints, goal, follower):
     return passed_goal or (d_start < 0.8 and rest < half * 0.95)
 
 
-def start_round_trip(grid, odo, slam, lidar, start, waypoints, goal, recover, last_points):
+LEG_LABEL = {
+    "go": "목적지로 이동",
+    "back": "원래 자리로",
+    "round": "왕복",
+}
+
+
+def leg_line(leg, start, waypoints, goal):
+    outbound = recorded_route(start, waypoints, goal)
+    if leg == "back":
+        return inbound_points(start, waypoints, goal)
+    if leg == "round":
+        return round_trip_points(outbound)
+    return outbound
+
+
+def rest_for_leg(leg, here, start, waypoints, goal, arrive_m=ARRIVE_M):
+    line = leg_line(leg, start, waypoints, goal)
+    return remaining_from(here, line, arrive_m=arrive_m)
+
+
+def follower_route_progress(odo, start, waypoints, goal, leg):
+    seq = leg_line(leg or "go", start, waypoints, goal)
+    n = len(seq)
+    if n == 0:
+        return 0, 0
+    cur = (odo.x, odo.y)
+    i = min(range(n), key=lambda k: math.hypot(cur[0] - seq[k][0], cur[1] - seq[k][1]))
+    return i + 1, n
+
+
+def start_leg(leg, grid, odo, slam, lidar, start, waypoints, goal, recover, last_points):
+    """한 구간을 붙인다. ('ok', follower) | ('already', None) | ('no_path', None)."""
+    label = LEG_LABEL.get(leg, "이동")
     print(c_dim("경로 위치 맞추는 중..."))
     scan = collect_scan(lidar, n=4, timeout_s=6.0) or last_points
     hit = snap_to_route(grid, odo, slam, scan, start, waypoints, goal)
     if hit is None:
-        print(c_warn("스캔 맞춤 실패. 지금 좌표로 왕복합니다"))
+        print(c_warn(f"스캔 맞춤 실패. 지금 좌표로 {label}"))
     else:
         name, found = hit
         extra = " (애매)" if found.ambiguous else ""
@@ -284,29 +327,34 @@ def start_round_trip(grid, odo, slam, lidar, start, waypoints, goal, recover, la
                 f"score={found.score:.2f}{extra}"
             )
         )
-    outbound, _trip, rest = round_trip_remaining(
-        (odo.x, odo.y), start, waypoints, goal, arrive_m=ARRIVE_M
-    )
+    rest = rest_for_leg(leg, (odo.x, odo.y), start, waypoints, goal)
     if not rest:
-        print(c_warn("이미 시작점에 있습니다. 왕복할 나머지가 없습니다"))
-        return None
+        print(c_warn(f"이미 도착. {label} 할 나머지가 없습니다"))
+        return "already", None
     off = dist_to_polyline((odo.x, odo.y), rest)
     if off >= REJOIN_OFF_M:
         print(c_info(f"경로에서 {off:.2f}m 옆. A*로 선에 붙입니다"))
     path = rejoin_path(grid, odo, rest, recover.disks, scan=None)
     if len(path) < 2:
         print(c_err("따라갈 점이 없습니다"))
-        return None
-    i, n = route_progress((odo.x, odo.y), start, waypoints, goal)
+        return "no_path", None
+    i, n = follower_route_progress(odo, start, waypoints, goal, leg)
     print(
         c_auto(
-            f"왕복 재생 {i}/{n}. "
+            f"{label} {i}/{n}. "
             f"시작 ({odo.x:.2f},{odo.y:.2f}) → "
             f"끝 ({path[-1][0]:.2f},{path[-1][1]:.2f})  "
-            f"기록점 {len(outbound)}  아무 키면 수동"
+            f"아무 키면 수동"
         )
     )
-    return Follower(path)
+    return "ok", Follower(path)
+
+
+def start_round_trip(grid, odo, slam, lidar, start, waypoints, goal, recover, last_points):
+    kind, follower = start_leg(
+        "round", grid, odo, slam, lidar, start, waypoints, goal, recover, last_points
+    )
+    return follower if kind == "ok" else None
 
 
 def save_now(store, slot_index, grid, odo, start, waypoints, goal, name, replace_map):
@@ -336,6 +384,8 @@ def run_drive(
     map_writable,
     grid=None,
     data=None,
+    center_host="",
+    center_port=9000,
 ):
     """하드웨어를 열고 키로 기록/왕복한다. 끝나면 세션 dict."""
     print(c_info(help_text()))
@@ -360,6 +410,8 @@ def run_drive(
     waypoints = []
     goal = None
     name = slot_name
+    center = None
+    dirty = False
     try:
         drive = Drive()
         odo = Odometry()
@@ -406,7 +458,7 @@ def run_drive(
                 print(c_info("기록 모드. 이전 경로는 비웠습니다. 지도는 유지. 도착에서 k"))
             else:
                 map_writable = False
-                print(c_ok("재생 모드. r 이면 경로를 갔다가 시작으로 돌아옵니다"))
+                print(c_ok("재생 모드. g 목적지, b 원래 자리, r 왕복"))
         else:
             grid = OccupancyGrid(size_m=16.0, resolution=0.05)
             recording = True
@@ -415,6 +467,163 @@ def run_drive(
 
         slam = Slam(grid, update_map=map_writable)
         slam.seed(odo)
+
+        auto_leg = None
+        nav_src = None
+        if center_host:
+            from robot.center_client import CenterClient
+
+            center = CenterClient(str(center_host), int(center_port or 9000))
+            center.start()
+            print(
+                c_info(
+                    f"중앙 {center_host}:{center_port} 연결 시도. "
+                    "여기 키와 센터 명령을 같이 씁니다. 키 쪽이 우선"
+                )
+            )
+
+        def current_phase():
+            return {"go": "go", "back": "back", "round": "round"}.get(auto_leg, "idle")
+
+        def phase_cmd(leg):
+            return "robot.back" if leg == "back" else "robot.go"
+
+        def emit_robot_ack(src, cmd):
+            if center is None or not src:
+                return
+            center.emit(f"A {src['id']} ACK {cmd}")
+
+        def emit_robot_fail(reason, src=None):
+            src = src or nav_src
+            if center is None or not src:
+                return
+            center.emit(
+                f"F {src['id']} FAIL {src.get('cmd', 'robot.go')} reason={reason}"
+            )
+
+        def emit_robot_prog():
+            if center is None or follower is None:
+                return
+            i, n = follower_route_progress(odo, start, waypoints, goal, auto_leg)
+            src = nav_src or {"id": "0000", "cmd": phase_cmd(auto_leg)}
+            center.emit(
+                f"P {src['id']} PROG {src['cmd']} i={i} n={n} phase={current_phase()}"
+            )
+
+        def emit_robot_done(reason):
+            nonlocal nav_src
+            if center is None:
+                nav_src = None
+                return
+            src = nav_src or {"id": "0000", "cmd": phase_cmd(auto_leg)}
+            i, n = follower_route_progress(odo, start, waypoints, goal, auto_leg)
+            center.emit(
+                f"D {src['id']} DONE {src['cmd']} reason={reason} "
+                f"i={i} n={n} phase=idle"
+            )
+            nav_src = None
+
+        def emit_robot_status(msg_id):
+            if center is None:
+                return
+            i, n = 0, 0
+            if follower is not None:
+                i, n = follower_route_progress(odo, start, waypoints, goal, auto_leg)
+            busy = 1 if mode == "auto" else 0
+            state = "NAV" if busy else "IDLE"
+            center.emit(
+                f"S {msg_id} STATUS state={state} phase={current_phase()} "
+                f"i={i} n={n} busy={busy}"
+            )
+
+        def abort_nav(reason="halted"):
+            nonlocal mode, follower, auto_leg, nav_src, motion
+            if nav_src:
+                if reason in {"arrived", "home", "already", "round_done"}:
+                    emit_robot_done(reason)
+                else:
+                    emit_robot_fail(reason, nav_src)
+                    nav_src = None
+            auto_leg = None
+            follower = None
+            mode = "teleop"
+            motion = None
+            recover.abort()
+            drive.stop(odo)
+
+        def begin_auto(leg, src=None):
+            nonlocal mode, follower, auto_leg, nav_src, recording, waypoints, goal, dirty
+            nonlocal last_follow_i, last_progress_m, last_move_t
+            if nav_src and (src is None or nav_src.get("id") != src.get("id")):
+                emit_robot_fail("replaced", nav_src)
+                nav_src = None
+            if recording:
+                waypoints, goal = seal_goal(odo, waypoints, goal)
+                recording = False
+                dirty = True
+                print(c_ok(f"기록 종료. 도착 {goal}"))
+            if not waypoints and goal is None:
+                print(c_warn("기록된 경로가 없습니다"))
+                if src:
+                    emit_robot_ack(src, src["cmd"])
+                    emit_robot_fail("no_route", src)
+                return
+            if src:
+                emit_robot_ack(src, src["cmd"])
+            kind, next_f = start_leg(
+                leg,
+                grid,
+                odo,
+                slam,
+                lidar,
+                start,
+                waypoints,
+                goal,
+                recover,
+                last_points,
+            )
+            src_use = src or {"id": "0000", "cmd": phase_cmd(leg)}
+            if kind == "already":
+                auto_leg = leg
+                nav_src = src_use
+                emit_robot_done("already")
+                auto_leg = None
+                return
+            if kind != "ok" or next_f is None:
+                emit_robot_fail("no_path", src_use)
+                return
+            follower = next_f
+            auto_leg = leg
+            nav_src = src_use
+            mode = "auto"
+            recover.abort()
+            recover.tries = 0
+            hall_watch.reset()
+            last_follow_i = -1
+            last_progress_m = None
+            last_move_t = time.monotonic()
+            emit_robot_prog()
+
+        def apply_center_item(item):
+            cmd = item.get("cmd") or ""
+            if cmd in ("status", "robot.status"):
+                emit_robot_status(item["id"])
+                return
+            if cmd in ("halt", "robot.halt"):
+                emit_robot_ack(item, cmd)
+                abort_nav("halted")
+                if center is not None:
+                    center.emit(f"D {item['id']} DONE {cmd} reason=stopped")
+                print(c_info("중앙 정지 → 수동"))
+                return
+            if cmd in ("robot.go", "go"):
+                begin_auto("go", item)
+                return
+            if cmd in ("robot.back", "back"):
+                begin_auto("back", item)
+                return
+            emit_robot_ack(item, cmd)
+            emit_robot_fail("unknown", item)
 
         while True:
             points = lidar.read()
@@ -431,6 +640,11 @@ def run_drive(
                 if added:
                     dirty = True
                     print(c_info(f"경로 {len(waypoints)} {waypoints[-1]}"))
+
+            if center is not None:
+                item = center.poll()
+                if item:
+                    apply_center_item(item)
 
             if mode == "auto":
                 scan_age = None if last_scan_t is None else now - last_scan_t
@@ -450,8 +664,12 @@ def run_drive(
                         else:
                             print(c_warn(recover.log))
                     if result == "ok":
-                        _, _, rest = round_trip_remaining(
-                            (odo.x, odo.y), start, waypoints, goal
+                        rest = rest_for_leg(
+                            auto_leg or "round",
+                            (odo.x, odo.y),
+                            start,
+                            waypoints,
+                            goal,
                         )
                         skipped = 0
                         path = rejoin_path(
@@ -460,10 +678,7 @@ def run_drive(
                         if len(path) < 2:
                             path = rejoin_path(grid, odo, rest, extra_disks=[], scan=None)
                         if len(path) < 2:
-                            drive.stop(odo)
-                            mode = "teleop"
-                            follower = None
-                            recover.abort()
+                            abort_nav("no_path")
                             print(c_err("우회 후 붙을 점이 없습니다. 수동"))
                         else:
                             follower = Follower(path)
@@ -478,16 +693,26 @@ def run_drive(
                                 )
                             )
                     elif result == "fail":
-                        drive.stop(odo)
-                        mode = "teleop"
-                        follower = None
+                        abort_nav("recover")
                         print(c_err("회복 실패. 수동"))
                 elif follower is None or follower.done():
+                    reason = {
+                        "go": "arrived",
+                        "back": "home",
+                        "round": "round_done",
+                    }.get(auto_leg, "done")
+                    label = {
+                        "go": "목적지 도착",
+                        "back": "원래 자리",
+                        "round": "왕복 끝. 시작점",
+                    }.get(auto_leg, "자동 끝")
                     drive.stop(odo)
+                    emit_robot_done(reason)
                     mode = "teleop"
                     follower = None
+                    auto_leg = None
                     recover.abort()
-                    print(c_ok("왕복 끝. 시작점"))
+                    print(c_ok(label))
                 else:
                     left = follower.remaining_m(odo)
                     heading = abs(follower.heading_err(odo))
@@ -520,12 +745,15 @@ def run_drive(
                     if trigger:
                         drive.stop(odo)
                         if recover.tries >= RECOVER_MAX:
-                            mode = "teleop"
-                            follower = None
+                            abort_nav("recover")
                             print(c_err(f"회복 {RECOVER_MAX}회 초과. 수동 ({trigger})"))
                         else:
-                            _, _, rest = round_trip_remaining(
-                                (odo.x, odo.y), start, waypoints, goal
+                            rest = rest_for_leg(
+                                auto_leg or "round",
+                                (odo.x, odo.y),
+                                start,
+                                waypoints,
+                                goal,
                             )
                             recover.start(
                                 odo,
@@ -554,13 +782,10 @@ def run_drive(
                             last_follow_i = follower.i
                             cur = follower.current()
                             if cur is not None:
-                                i, n = route_progress(
-                                    (odo.x, odo.y), start, waypoints, goal
+                                i, n = follower_route_progress(
+                                    odo, start, waypoints, goal, auto_leg
                                 )
-                                home = trip_going_home(
-                                    odo, start, waypoints, goal, follower
-                                )
-                                phase = "복귀" if home else "왕복"
+                                phase = LEG_LABEL.get(auto_leg, "이동")
                                 print(
                                     c_auto(
                                         f"{phase} 점 {i}/{n} 추종  "
@@ -568,6 +793,7 @@ def run_drive(
                                         f"남은 {follower.remaining_m(odo):.2f}m"
                                     )
                                 )
+                                emit_robot_prog()
 
             ch = keys.read(0.0 if mode == "auto" else 0.02)
             if ch is None:
@@ -594,6 +820,7 @@ def run_drive(
                                     going_home=trip_going_home(
                                         odo, start, waypoints, goal, follower
                                     ),
+                                    auto_leg=auto_leg,
                                 )
                             )
                         )
@@ -611,11 +838,7 @@ def run_drive(
             if ch in ("\x03", "q", "Q"):
                 break
             if ch == "t":
-                mode = "teleop"
-                follower = None
-                recover.abort()
-                motion = None
-                drive.stop(odo)
+                abort_nav("halted")
                 print(c_info("수동"))
                 continue
             if mode == "auto" and ch not in (
@@ -628,12 +851,10 @@ def run_drive(
                 "=",
                 "r",
                 "l",
+                "g",
+                "b",
             ):
-                mode = "teleop"
-                follower = None
-                recover.abort()
-                drive.stop(odo)
-                motion = None
+                abort_nav("halted")
                 print(c_warn("키 입력 → 수동"))
 
             if ch == "w":
@@ -752,40 +973,19 @@ def run_drive(
                         replace_map=map_writable,
                     )
                     dirty = False
+            elif ch in ("g", "G"):
+                begin_auto("go")
+            elif ch in ("b", "B"):
+                begin_auto("back")
             elif ch == "r":
-                if recording:
-                    waypoints, goal = seal_goal(odo, waypoints, goal)
-                    recording = False
-                    dirty = True
-                    print(c_ok(f"기록 종료. 도착 {goal}"))
-                if not waypoints and goal is None:
-                    print(c_warn("기록된 경로가 없습니다"))
-                    continue
-                follower = start_round_trip(
-                    grid,
-                    odo,
-                    slam,
-                    lidar,
-                    start,
-                    waypoints,
-                    goal,
-                    recover,
-                    last_points,
-                )
-                if follower is None:
-                    continue
-                mode = "auto"
-                recover.abort()
-                recover.tries = 0
-                hall_watch.reset()
-                last_follow_i = -1
-                last_progress_m = None
-                last_move_t = time.monotonic()
+                begin_auto("round")
             elif ch in ("\n", "\r"):
                 pass
     except KeyboardInterrupt:
         print(c_warn("Ctrl+C"))
     finally:
+        if center is not None:
+            center.close()
         if drive is not None:
             try:
                 drive.stop(odo)

@@ -5,4 +5,8 @@
 const int PUSHER_FORWARD = -1;
 const int PUSHER_BACK = 1;
 
+// 푸셔 4핀 = 쉴드 X. test_pusher_motor 와 같음.
+const int PUSHER_STEP_PIN = 2;  // D2
+const int PUSHER_DIR_PIN = 5;   // D5
+
 #endif

@@ -6,52 +6,55 @@
   <title>Robi 모니터</title>
   <style>
     :root {
-      --bg: #12141a;
-      --panel: #1b1e27;
-      --line: #2c3140;
-      --text: #eceae3;
-      --mute: #8d927c;
-      --out: #7ec8dc;
-      --in: #b7d59a;
-      --fail: #ee8b7c;
-      --mqtt: #c9b3ee;
-      --topic: #d7bc8a;
-      --sys: #8d927c;
+      --bg: #f3f4f6;
+      --panel: #ffffff;
+      --line: #d5d8de;
+      --text: #1a1d24;
+      --mute: #4b5563;
+      --out: #0369a1;
+      --in: #15803d;
+      --fail: #b91c1c;
+      --mqtt: #6d28d9;
+      --topic: #92400e;
+      --sys: #4b5563;
+      --btn: #eef1f5;
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
-      font: 15px/1.45 "Segoe UI", "Malgun Gothic", sans-serif; }
+      font: 700 20px/1.4 "Segoe UI", "Malgun Gothic", sans-serif; }
     header { display: flex; justify-content: space-between; align-items: baseline;
-      padding: 16px 20px 12px; border-bottom: 1px solid var(--line); }
-    header h1 { margin: 0; font-size: 18px; font-weight: 650; letter-spacing: .02em; }
-    header p { margin: 0; color: var(--mute); font-size: 13px; }
-    .layout { display: grid; grid-template-columns: 280px 1fr; gap: 16px; padding: 16px 20px 20px; height: calc(100% - 58px); }
+      padding: 18px 24px 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
+    header h1 { margin: 0; font-size: 32px; font-weight: 800; }
+    header p { margin: 0; color: var(--mute); font-size: 18px; font-weight: 700; }
+    .layout { display: grid; grid-template-columns: 360px 1fr; gap: 18px; padding: 18px 24px 24px; height: calc(100% - 72px); }
     .log-wrap { display: flex; flex-direction: column; min-height: 0; }
     @media (max-width: 860px) {
       .layout { grid-template-columns: 1fr; height: auto; }
       .log-wrap { order: -1; min-height: 280px; }
     }
-    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
-    h2 { margin: 0 0 10px; font-size: 12px; font-weight: 650; color: var(--mute); text-transform: uppercase; letter-spacing: .08em; }
-    .badges { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
-    .badge { font-size: 12px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--mute); }
-    .badge.on { color: var(--in); border-color: #3d5a3a; }
-    .badge.off { color: var(--fail); }
-    .kv { display: grid; grid-template-columns: 88px 1fr; gap: 6px 8px; font-size: 13px; margin-bottom: 14px; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+    h2 { margin: 0 0 12px; font-size: 18px; font-weight: 800; color: var(--mute); }
+    .badges { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+    .badge { font-size: 16px; font-weight: 800; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); color: var(--mute); }
+    .badge.on { color: var(--in); border-color: #86efac; background: #f0fdf4; }
+    .badge.off { color: var(--fail); background: #fef2f2; }
+    .kv { display: grid; grid-template-columns: 88px 1fr; gap: 8px 10px; font-size: 20px; font-weight: 800; margin-bottom: 14px; }
     .kv span { color: var(--mute); }
-    .mm { font-size: 28px; font-variant-numeric: tabular-nums; letter-spacing: .04em; }
-    .sw { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 14px; }
-    .sw i { font-style: normal; font-size: 12px; padding: 2px 7px; border-radius: 6px; border: 1px solid var(--line); color: var(--mute); }
-    .sw i.hit { color: var(--in); border-color: #3d5a3a; }
-    .btns { display: flex; flex-wrap: wrap; gap: 6px; }
-    button { background: #252a36; color: var(--text); border: 1px solid var(--line); border-radius: 7px;
-      padding: 7px 10px; font: inherit; cursor: pointer; }
-    button:hover { border-color: #5a6278; }
+    .mm { font-size: 42px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: .02em; }
+    .phase { font-size: 28px; font-weight: 800; margin: 0 0 6px; }
+    .pathn { font-size: 52px; font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: .02em; margin-bottom: 16px; }
+    .sw { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0 16px; }
+    .sw i { font-style: normal; font-size: 16px; font-weight: 800; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); color: var(--mute); }
+    .sw i.hit { color: var(--in); border-color: #86efac; background: #f0fdf4; }
+    .btns { display: flex; flex-wrap: wrap; gap: 8px; }
+    button { background: var(--btn); color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+      padding: 12px 16px; font: 800 20px/1.2 "Segoe UI", "Malgun Gothic", sans-serif; cursor: pointer; }
+    button:hover { border-color: #9aa3b2; background: #e4e8ee; }
     button.halt { color: var(--fail); }
-    .log-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-    .log { flex: 1; overflow: auto; font: 12.5px/1.5 ui-monospace, Consolas, monospace;
-      background: #10131a; border-radius: 8px; padding: 10px; min-height: 280px; }
-    .row { display: grid; grid-template-columns: 76px 44px 150px 1fr; gap: 8px; padding: 2px 0; }
+    .log-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .log { flex: 1; overflow: auto; font: 700 18px/1.45 ui-monospace, Consolas, monospace;
+      background: #f8fafc; border: 1px solid var(--line); border-radius: 8px; padding: 12px; min-height: 280px; }
+    .row { display: grid; grid-template-columns: 88px 52px 170px 1fr; gap: 10px; padding: 4px 0; font-weight: 700; }
     .row .t { color: var(--mute); }
     .row .via.mqtt { color: var(--mqtt); }
     .row .via.hub { color: var(--mute); }
@@ -60,23 +63,27 @@
     .row.in .body { color: var(--in); }
     .row.fail .body { color: var(--fail); }
     .row.sys .body { color: var(--sys); }
-    .legend { color: var(--mute); font-size: 12px; margin-top: 10px; }
+    .legend { color: var(--mute); font-size: 16px; font-weight: 700; margin-top: 12px; }
   </style>
 </head>
 <body>
   <header>
     <h1>Robi 모니터</h1>
-    <p>상자 명령과 MQTT 토픽을 같이 봅니다</p>
+    <p>상자 명령과 로봇 경로를 같이 봅니다</p>
   </header>
   <div class="layout">
     <aside class="panel">
       <h2>연결</h2>
       <div class="badges">
         <span id="boxBadge" class="badge off">상자</span>
+        <span id="robotBadge" class="badge off">로봇</span>
         <span id="mqttBadge" class="badge off">MQTT</span>
         <span id="wsBadge" class="badge off">브라우저</span>
       </div>
-      <h2>상태</h2>
+      <h2>이동로봇</h2>
+      <div class="phase" id="robotPhase">대기</div>
+      <div class="pathn" id="robotPath">—</div>
+      <h2>상자</h2>
       <div class="mm" id="mm">— mm</div>
       <div class="kv">
         <span>동작</span><div id="state">—</div>
@@ -103,6 +110,7 @@
   </div>
   <script>
     const logEl = document.getElementById("log");
+    let socket = null;
     const LABELS = {
       "lift.up": "상승",
       "lift.down": "하강",
@@ -141,9 +149,21 @@
       setHit("pf", s.pusher_front);
     }
 
+    function applyRobot(r) {
+      if (!r) return;
+      document.getElementById("robotPhase").textContent = r.phase || "대기";
+      const i = Number(r.i || 0);
+      const n = Number(r.n || 0);
+      document.getElementById("robotPath").textContent =
+        n > 0 ? (i + "/" + n) : "—";
+    }
+
     function applyMeta(msg) {
       const box = (msg.box || []).join(", ") || "없음";
       setBadge("boxBadge", (msg.box || []).length > 0, "상자 " + box);
+      const robots = msg.robot_names || [];
+      const robot = robots.join(", ") || "없음";
+      setBadge("robotBadge", robots.length > 0, "로봇 " + robot);
       const mqttLabel = msg.mqtt ? ("MQTT " + (msg.mqtt_host || "연결")) : "MQTT 꺼짐";
       setBadge("mqttBadge", !!msg.mqtt, mqttLabel);
     }
@@ -164,18 +184,32 @@
     }
 
     async function sendCmd(cmd) {
-      await fetch("/api/cmd", {
+      if (socket && socket.readyState === 1) {
+        socket.send(JSON.stringify({ type: "cmd", cmd: cmd }));
+        return;
+      }
+      const res = await fetch("/api/cmd", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cmd })
       });
+      if (!res.ok) {
+        addRow({ type: "msg", ts: Date.now() / 1000, via: "hub", topic: "robi/sys", dir: "sys", kind: "sys", line: "명령 실패 " + cmd });
+      }
     }
     async function sendRecipe(name) {
-      await fetch("/api/cmd", {
+      if (socket && socket.readyState === 1) {
+        socket.send(JSON.stringify({ type: "recipe", name: name }));
+        return;
+      }
+      const res = await fetch("/api/cmd", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ recipe: name })
       });
+      if (!res.ok) {
+        addRow({ type: "msg", ts: Date.now() / 1000, via: "hub", topic: "robi/sys", dir: "sys", kind: "sys", line: "레시피 실패 " + name });
+      }
     }
 
     async function setupButtons() {
@@ -204,8 +238,10 @@
     function connect() {
       const proto = location.protocol === "https:" ? "wss" : "ws";
       const ws = new WebSocket(proto + "://" + location.host + "/ws");
+      socket = ws;
       ws.onopen = () => setBadge("wsBadge", true, "브라우저 연결");
       ws.onclose = () => {
+        if (socket === ws) socket = null;
         setBadge("wsBadge", false, "브라우저 끊김");
         setTimeout(connect, 1000);
       };
@@ -213,11 +249,14 @@
         const msg = JSON.parse(ev.data);
         if (msg.type === "snapshot") {
           applyStatus(msg.status);
+          applyRobot(msg.robot);
           applyMeta(msg);
           logEl.innerHTML = "";
           (msg.history || []).forEach(addRow);
         } else if (msg.type === "status") {
           applyStatus(msg.status);
+        } else if (msg.type === "robot") {
+          applyRobot(msg.robot);
         } else if (msg.type === "meta") {
           applyMeta(msg);
         } else if (msg.type === "msg") {

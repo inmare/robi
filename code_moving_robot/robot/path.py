@@ -113,6 +113,28 @@ def remaining_from(here, polyline, arrive_m=0.15):
     return collapse_points([(p[0], p[1], 0.0) if len(p) < 3 else p for p in pts], min_m=0.04)
 
 
+def inbound_points(start, waypoints, goal):
+    """목적지에서 시작점으로. 나갔던 점을 거꾸로 밟는다."""
+    outbound = recorded_route(start, waypoints, goal)
+    if not outbound:
+        return []
+    if len(outbound) == 1:
+        return list(outbound)
+    return collapse_points(list(reversed(outbound)), min_m=0.04)
+
+
+def outbound_remaining(here, start, waypoints, goal, arrive_m=0.15):
+    outbound = recorded_route(start, waypoints, goal)
+    rest = remaining_from(here, outbound, arrive_m=arrive_m)
+    return outbound, rest
+
+
+def inbound_remaining(here, start, waypoints, goal, arrive_m=0.15):
+    inbound = inbound_points(start, waypoints, goal)
+    rest = remaining_from(here, inbound, arrive_m=arrive_m)
+    return inbound, rest
+
+
 def round_trip_remaining(here, start, waypoints, goal, arrive_m=0.15):
     outbound = recorded_route(start, waypoints, goal)
     trip = round_trip_points(outbound)

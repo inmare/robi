@@ -9,6 +9,18 @@ from center.links import Link
 from center.protocol import Event, format_request, parse_line
 from center.recipes import RECIPES, Step
 
+
+def _role_of(link: Link) -> str:
+    return getattr(link, "role", "box") or "box"
+
+
+def default_timeout(cmd: str) -> float:
+    if cmd in {"robot.go", "robot.back"}:
+        return 300.0
+    if cmd.startswith("robot."):
+        return 15.0
+    return 30.0
+
 Listener = Callable[[str, Event | None], None]
 
 
@@ -30,11 +42,16 @@ class Hub:
         self.links = [item for item in self.links if item is not link]
         self._note(f"# 끊김 {link.name}")
 
-    def active_link(self) -> Link | None:
+    def active_link(self, role: str | None = None) -> Link | None:
         for link in self.links:
-            if link.connected:
+            if not link.connected:
+                continue
+            if role is None or _role_of(link) == role:
                 return link
         return None
+
+    def connected_links(self) -> list[Link]:
+        return [link for link in self.links if link.connected]
 
     def next_id(self) -> str:
         self._seq = (self._seq + 1) & 0xFFFF
@@ -56,11 +73,29 @@ class Hub:
             if not future.done():
                 future.set_result(event)
 
-    async def send_cmd(self, cmd: str, timeout: float = 30.0) -> Event:
-        link = self.active_link()
+    async def send_cmd(self, cmd: str, timeout: float | None = None) -> Event:
+        if timeout is None:
+            timeout = default_timeout(cmd)
+        if cmd == "halt":
+            last: Event | None = None
+            sent = False
+            for link in self.connected_links():
+                target = "robot.halt" if _role_of(link) == "robot" else "halt"
+                last = await self._send_to(link, target, min(timeout, 8.0))
+                sent = True
+            if not sent:
+                raise RuntimeError("연결된 장치가 없음")
+            assert last is not None
+            return last
+        role = "robot" if cmd.startswith("robot.") else "box"
+        link = self.active_link(role)
         if link is None:
+            if role == "robot":
+                raise RuntimeError("로봇이 아직 연결되지 않음")
             raise RuntimeError("상자가 아직 연결되지 않음")
+        return await self._send_to(link, cmd, timeout)
 
+    async def _send_to(self, link: Link, cmd: str, timeout: float) -> Event:
         msg_id = self.next_id()
         line = format_request(msg_id, cmd)
         loop = asyncio.get_running_loop()
@@ -85,7 +120,10 @@ class Hub:
         for index, step in enumerate(steps, start=1):
             if on_step is not None:
                 on_step(index, step)
-            last = await self.send_cmd(step.cmd, timeout=step_timeout)
+            last = await self.send_cmd(
+                step.cmd,
+                timeout=step.timeout if getattr(step, "timeout", None) else step_timeout,
+            )
             if last.kind == "F":
                 return last
         assert last is not None

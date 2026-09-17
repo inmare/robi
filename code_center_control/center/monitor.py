@@ -16,24 +16,54 @@ CMD_TOPIC = "robi/box/cmd"
 EVENT_TOPIC = "robi/box/event"
 STATUS_TOPIC = "robi/box/status"
 HELLO_TOPIC = "robi/box/hello"
+ROBOT_CMD_TOPIC = "robi/robot/cmd"
+ROBOT_EVENT_TOPIC = "robi/robot/event"
+ROBOT_STATUS_TOPIC = "robi/robot/status"
+ROBOT_HELLO_TOPIC = "robi/robot/hello"
 SYS_TOPIC = "robi/sys"
+
+PHASE_LABEL = {
+    "go": "목적지로 이동",
+    "back": "원래 자리로",
+    "round": "왕복",
+    "idle": "대기",
+    "arrived": "목적지 도착",
+    "home": "원래 자리",
+    "NAV": "이동 중",
+    "IDLE": "대기",
+}
+
+
+def _is_robot(event: Event | None) -> bool:
+    if event is None:
+        return False
+    if event.kind == "H" and event.cmd == "robot":
+        return True
+    if (event.cmd or "").startswith("robot."):
+        return True
+    if "phase" in event.fields and "mm" not in event.fields:
+        return True
+    return False
 
 
 def classify(line: str, event: Event | None) -> tuple[str, str]:
     if line.startswith("#"):
         return SYS_TOPIC, "sys"
     if line.startswith(">"):
+        if " robot." in line:
+            return ROBOT_CMD_TOPIC, "out"
         return CMD_TOPIC, "out"
     if event is None:
         return SYS_TOPIC, "sys"
+    robot = _is_robot(event)
     if event.kind == "S":
-        return STATUS_TOPIC, "in"
+        return (ROBOT_STATUS_TOPIC if robot else STATUS_TOPIC), "in"
     if event.kind == "H":
-        return HELLO_TOPIC, "in"
+        return (ROBOT_HELLO_TOPIC if robot else HELLO_TOPIC), "in"
     if event.kind in {"A", "D", "F", "P"}:
-        return EVENT_TOPIC, "in"
+        return (ROBOT_EVENT_TOPIC if robot else EVENT_TOPIC), "in"
     if event.kind in {"C", "Q"}:
-        return CMD_TOPIC, "in"
+        return (ROBOT_CMD_TOPIC if robot else CMD_TOPIC), "in"
     return SYS_TOPIC, "sys"
 
 
@@ -45,6 +75,7 @@ class Monitor:
         self.mqtt_ok = False
         self.mqtt_host = ""
         self.box_names: list[str] = []
+        self.robot_names: list[str] = []
         self.status: dict[str, Any] = {
             "state": "—",
             "mm": None,
@@ -55,40 +86,48 @@ class Monitor:
             "pusher_front": None,
             "busy": 0,
         }
+        self.robot: dict[str, Any] = {
+            "phase": "대기",
+            "i": 0,
+            "n": 0,
+            "busy": 0,
+        }
 
     def snapshot(self) -> dict[str, Any]:
         return {
             "type": "snapshot",
             "history": list(self.history),
             "status": self.status,
+            "robot": dict(self.robot),
             "box": list(self.box_names),
+            "robot_names": list(self.robot_names),
             "mqtt": self.mqtt_ok,
             "mqtt_host": self.mqtt_host,
         }
 
     def set_box(self, names: list[str]) -> None:
-        self.box_names = names
-        self._push(
-            {
-                "type": "meta",
-                "box": list(names),
-                "mqtt": self.mqtt_ok,
-                "mqtt_host": self.mqtt_host,
-            }
-        )
+        self.set_devices(names, self.robot_names)
+
+    def set_devices(self, box: list[str], robot: list[str] | None = None) -> None:
+        self.box_names = box
+        if robot is not None:
+            self.robot_names = robot
+        self._push(self._meta())
+
+    def _meta(self) -> dict[str, Any]:
+        return {
+            "type": "meta",
+            "box": list(self.box_names),
+            "robot_names": list(self.robot_names),
+            "mqtt": self.mqtt_ok,
+            "mqtt_host": self.mqtt_host,
+        }
 
     def set_mqtt(self, ok: bool, host: str = "") -> None:
         self.mqtt_ok = ok
         if host:
             self.mqtt_host = host
-        self._push(
-            {
-                "type": "meta",
-                "box": list(self.box_names),
-                "mqtt": self.mqtt_ok,
-                "mqtt_host": self.mqtt_host,
-            }
-        )
+        self._push(self._meta())
 
     def on_hub(self, line: str, event: Event | None) -> None:
         topic, direction = classify(line, event)
@@ -145,6 +184,9 @@ class Monitor:
     def _apply_status(self, event: Event | None) -> None:
         if event is None:
             return
+        if _is_robot(event):
+            self._apply_robot(event)
+            return
         if event.kind == "S":
             for key in (
                 "state",
@@ -183,6 +225,46 @@ class Monitor:
                 except ValueError:
                     pass
             self._push({"type": "status", "status": dict(self.status)})
+
+    def _apply_robot(self, event: Event) -> None:
+        phase_raw = event.fields.get("phase", "")
+        if event.kind in {"D", "F"} and not phase_raw:
+            phase_raw = "idle"
+        if event.kind == "P" and not phase_raw:
+            if event.cmd == "robot.back":
+                phase_raw = "back"
+            elif event.cmd in {"robot.go"}:
+                phase_raw = "go"
+        if phase_raw:
+            self.robot["phase"] = PHASE_LABEL.get(phase_raw, phase_raw)
+        if "i" in event.fields:
+            try:
+                self.robot["i"] = int(event.fields["i"])
+            except ValueError:
+                pass
+        if "n" in event.fields:
+            try:
+                self.robot["n"] = int(event.fields["n"])
+            except ValueError:
+                pass
+        if event.kind == "P":
+            self.robot["busy"] = 1
+        elif event.kind in {"D", "F"}:
+            self.robot["busy"] = 0
+            if event.kind == "D":
+                reason = event.fields.get("reason", "")
+                if reason == "arrived":
+                    self.robot["phase"] = PHASE_LABEL["arrived"]
+                elif reason == "home":
+                    self.robot["phase"] = PHASE_LABEL["home"]
+                elif not phase_raw:
+                    self.robot["phase"] = PHASE_LABEL["idle"]
+        elif event.kind == "S" and "busy" in event.fields:
+            try:
+                self.robot["busy"] = int(event.fields["busy"])
+            except ValueError:
+                pass
+        self._push({"type": "robot", "robot": dict(self.robot)})
 
     def _push(self, frame: dict[str, Any]) -> None:
         if frame.get("type") == "msg":

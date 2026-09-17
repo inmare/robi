@@ -1,5 +1,6 @@
 """이동로봇 메인. 슬롯 TUI에서 경로를 고르고 왕복 주행한다."""
 
+import argparse
 from pathlib import Path
 
 from robot.session import run_drive, save_now
@@ -17,6 +18,8 @@ from robot.tui import (
 
 ROOT = Path(__file__).resolve().parent
 STORE = SlotStore(ROOT / "maps" / "slots")
+CENTER_HOST = ""
+CENTER_PORT = 9000
 
 
 def main_menu_lines(slots):
@@ -144,6 +147,8 @@ def drive_new(slot_index=None, slot_name=DEFAULT_NAME, data=None, grid=None):
         map_writable=True,
         grid=grid,
         data=data,
+        center_host=CENTER_HOST,
+        center_port=CENTER_PORT,
     )
     after_drive(result, force_overwrite=slot_index is not None)
     prompt(c_dim("Enter 로 메뉴..."))
@@ -164,12 +169,29 @@ def drive_play(info):
         map_writable=False,
         grid=grid,
         data=data,
+        center_host=CENTER_HOST,
+        center_port=CENTER_PORT,
     )
     after_drive(result)
     prompt(c_dim("Enter 로 메뉴..."))
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Robi 이동로봇")
+    parser.add_argument(
+        "--center",
+        default="",
+        help="중앙 컨트롤 TCP 주소. 예: 192.168.0.10",
+    )
+    parser.add_argument("--center-port", type=int, default=9000)
+    return parser.parse_args()
+
+
 def main():
+    global CENTER_HOST, CENTER_PORT
+    args = parse_args()
+    CENTER_HOST = args.center
+    CENTER_PORT = args.center_port
     while True:
         try:
             raw = show_main_menu()

@@ -21,6 +21,9 @@ if TYPE_CHECKING:
 CMD_TOPIC = "robi/box/cmd"
 EVENT_TOPIC = "robi/box/event"
 STATUS_TOPIC = "robi/box/status"
+ROBOT_CMD_TOPIC = "robi/robot/cmd"
+ROBOT_EVENT_TOPIC = "robi/robot/event"
+ROBOT_STATUS_TOPIC = "robi/robot/status"
 
 
 class MqttBus:
@@ -48,6 +51,7 @@ class MqttBus:
 
     def _on_connect(self, client: mqtt.Client, *_args: object) -> None:
         client.subscribe(CMD_TOPIC)
+        client.subscribe(ROBOT_CMD_TOPIC)
         if self.monitor is not None:
             self.monitor.set_mqtt(True, self.host)
 
@@ -88,6 +92,10 @@ class MqttBus:
             "fields": event.fields,
         }
         topic = STATUS_TOPIC if event.kind == "S" else EVENT_TOPIC
+        if (event.cmd or "").startswith("robot.") or (
+            "phase" in event.fields and "mm" not in event.fields
+        ):
+            topic = ROBOT_STATUS_TOPIC if event.kind == "S" else ROBOT_EVENT_TOPIC
         payload = json.dumps(body, ensure_ascii=False)
         self.client.publish(topic, payload, qos=0)
         if self.monitor is not None:

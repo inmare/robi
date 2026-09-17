@@ -11,6 +11,7 @@ OnLine = Callable[[str], None]
 
 class Link:
     name = "link"
+    role = "box"
 
     async def send(self, line: str) -> None:
         raise NotImplementedError
@@ -25,6 +26,7 @@ class SerialLink(Link):
         import serial
 
         self.name = f"serial:{port}"
+        self.role = "box"
         self._ser = serial.Serial(port, baud, timeout=0.05)
         self._on_line = on_line
         self._loop = loop
@@ -71,6 +73,7 @@ class TcpClientLink(Link):
         peer: str,
     ):
         self.name = f"tcp:{peer}"
+        self.role = "box"
         self._reader = reader
         self._writer = writer
         self._on_line = on_line
@@ -123,6 +126,7 @@ class MockLink(Link):
         self._gen = 0
         self._active_id = ""
         self._active_cmd = ""
+        self.role = "box"
         loop.call_soon(on_line, "H box")
 
     @property
@@ -176,12 +180,12 @@ class MockLink(Link):
             if cmd == "lift.up":
                 self._state = "LIFT_UP"
                 self._lift_bottom = 0
-                while self._mm > 70:
+                while self._mm > 40:
                     if gen != self._gen:
                         return
                     self._mm -= 20
-                    if self._mm < 70:
-                        self._mm = 70
+                    if self._mm < 40:
+                        self._mm = 40
                     self._emit(f"P {msg_id} PROG {cmd} mm={self._mm}")
                     await asyncio.sleep(0.12)
                 if gen != self._gen:
@@ -223,3 +227,105 @@ class MockLink(Link):
 
     def close(self) -> None:
         self._open = False
+        self._gen += 1
+
+
+class MockRobotLink(Link):
+    """보드 없이 로봇 go/back 프로토콜만 시험."""
+
+    name = "mock-robot"
+    role = "robot"
+
+    def __init__(self, on_line: OnLine, loop: asyncio.AbstractEventLoop, n: int = 17):
+        self._on_line = on_line
+        self._loop = loop
+        self._n = n
+        self._i = 0
+        self._phase = "idle"
+        self._busy = False
+        self._open = True
+        self._gen = 0
+        self._active_id = ""
+        self._active_cmd = ""
+        loop.call_soon(on_line, "H robot")
+
+    @property
+    def connected(self) -> bool:
+        return self._open
+
+    async def send(self, line: str) -> None:
+        parts = line.split()
+        if len(parts) < 3:
+            return
+        kind, msg_id, cmd = parts[0], parts[1], parts[2]
+        if kind == "Q" or cmd in {"status", "robot.status"}:
+            self._emit(self._status(msg_id))
+            return
+        if self._busy and cmd not in {"halt", "robot.halt"}:
+            self._emit(f"F {msg_id} FAIL {cmd} reason=busy")
+            return
+        self._loop.create_task(self._run(msg_id, cmd))
+
+    def _emit(self, line: str) -> None:
+        self._on_line(line)
+
+    def _status(self, msg_id: str) -> str:
+        state = "NAV" if self._busy else "IDLE"
+        return (
+            f"S {msg_id} STATUS state={state} phase={self._phase} "
+            f"i={self._i} n={self._n} busy={1 if self._busy else 0}"
+        )
+
+    async def _run(self, msg_id: str, cmd: str) -> None:
+        self._emit(f"A {msg_id} ACK {cmd}")
+        if cmd in {"halt", "robot.halt"}:
+            self._gen += 1
+            if self._active_id:
+                self._emit(
+                    f"F {self._active_id} FAIL {self._active_cmd} reason=halted"
+                )
+                self._active_id = ""
+                self._active_cmd = ""
+            self._busy = False
+            self._phase = "idle"
+            self._emit(
+                f"D {msg_id} DONE {cmd} reason=stopped i={self._i} n={self._n}"
+            )
+            return
+        if cmd not in {"robot.go", "robot.back"}:
+            self._emit(f"F {msg_id} FAIL {cmd} reason=unknown")
+            return
+
+        self._busy = True
+        self._active_id = msg_id
+        self._active_cmd = cmd
+        self._phase = "go" if cmd == "robot.go" else "back"
+        self._i = 0
+        gen = self._gen
+        try:
+            for step in range(1, self._n + 1):
+                if gen != self._gen:
+                    return
+                self._i = step
+                self._emit(
+                    f"P {msg_id} PROG {cmd} i={self._i} n={self._n} "
+                    f"phase={self._phase}"
+                )
+                await asyncio.sleep(0.08)
+            if gen != self._gen:
+                return
+            reason = "arrived" if cmd == "robot.go" else "home"
+            self._phase = "idle"
+            self._emit(
+                f"D {msg_id} DONE {cmd} reason={reason} i={self._n} n={self._n}"
+            )
+        finally:
+            if gen == self._gen:
+                self._busy = False
+                self._active_id = ""
+                self._active_cmd = ""
+                self._phase = "idle"
+
+    def close(self) -> None:
+        self._open = False
+        self._gen += 1

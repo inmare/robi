@@ -5,12 +5,33 @@
 #include <Arduino.h>
 
 // X·Z 드라이버 바꿔 꽂은 상태. 리프트 4핀은 Z 칸. STEP D4, DIR D7
-AccelStepper lift(AccelStepper::DRIVER, 4, 7);
+AccelStepper lift(AccelStepper::DRIVER, LIFT_STEP_PIN, LIFT_DIR_PIN);
 
 static bool sensorOk = false;
 
+static uint8_t tofHoldHits = 0;
+
 static bool distanceOk(uint16_t mm) {
     return !sensorTimeoutOccurred() && mm > 0 && mm < 8000;
+}
+
+static bool tofHoldReached(uint16_t mm) {
+    if (!distanceOk(mm)) {
+        tofHoldHits = 0;
+        return false;
+    }
+    int d = (int)mm;
+    if (tofPastTarget(d)) {
+        return true;
+    }
+    if (tofInBand(d)) {
+        if (tofHoldHits < 255) {
+            tofHoldHits++;
+        }
+        return tofHoldHits >= TARGET_HOLD_COUNT;
+    }
+    tofHoldHits = 0;
+    return false;
 }
 
 static bool liftAlreadyAtUpStop() {
@@ -22,7 +43,7 @@ static bool liftAlreadyAtUpStop() {
         return false;
     }
     uint16_t mm = sensorReadDistanceMm();
-    if (distanceOk(mm) && mm <= TARGET_DISTANCE_MM) {
+    if (distanceOk(mm) && tofReached((int)mm)) {
         Serial.print(mm);
         Serial.println(" mm, 이미 목표, 이동 안 함");
         return true;
@@ -64,6 +85,7 @@ void loop() {
             lift.setMaxSpeed(550);
             lift.setAcceleration(220);
             lift.move(12000 * LIFT_UP);
+            tofHoldHits = 0;
         } else if (c == 'd' || c == 'D') {
             Serial.println("d, 하강");
             if (limitLiftBottomPressed()) {
@@ -86,7 +108,7 @@ void loop() {
             lift.setCurrentPosition(lift.currentPosition());
         } else if (sensorOk && sensorRangeReady()) {
             uint16_t mm = sensorReadDistanceMm();
-            if (!sensorTimeoutOccurred() && mm > 0 && mm < 8000 && mm <= TARGET_DISTANCE_MM) {
+            if (tofHoldReached(mm)) {
                 lift.setCurrentPosition(lift.currentPosition());
             }
         }

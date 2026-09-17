@@ -8,7 +8,10 @@ sys.path.insert(0, str(ROOT))
 
 from robot.path import (
     densify_route,
+    inbound_points,
+    inbound_remaining,
     lateral_offsets,
+    outbound_remaining,
     project_polyline,
     remaining_from,
     round_trip_points,
@@ -64,6 +67,26 @@ def test_densify_keeps_ends():
     assert len(pts) >= 3
 
 
+def test_outbound_stops_at_goal():
+    start = [0.0, 0.0, 0.0]
+    waypoints = [[1.0, 0.0, 0.0]]
+    goal = [2.0, 0.0, 0.0]
+    _out, rest = outbound_remaining((0.2, 0.0), start, waypoints, goal)
+    assert rest[-1][0] >= 1.9
+    assert any(p[0] >= 1.9 for p in rest)
+
+
+def test_inbound_goes_home():
+    start = [0.0, 0.0, 0.0]
+    waypoints = [[1.0, 0.0, 0.0]]
+    goal = [2.0, 0.0, 0.0]
+    inbound = inbound_points(start, waypoints, goal)
+    assert inbound[0][0] >= 1.9
+    assert inbound[-1][0] < 0.2
+    _in, rest = inbound_remaining((1.9, 0.0), start, waypoints, goal)
+    assert rest[-1][0] < 0.2
+
+
 if __name__ == "__main__":
     test_round_trip_goes_out_and_back()
     test_remaining_from_middle()
@@ -71,4 +94,6 @@ if __name__ == "__main__":
     test_project_sideways()
     test_lateral_offsets_include_center()
     test_densify_keeps_ends()
+    test_outbound_stops_at_goal()
+    test_inbound_goes_home()
     print("path_test ok")

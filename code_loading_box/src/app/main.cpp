@@ -8,19 +8,20 @@
 #include <SoftwareSerial.h>
 #include <string.h>
 
-// 핀맵: 리프트=X D2/D5, 푸셔=Z D4/D7.
-// test_lift_motor / test_pusher_motor 에서 X·Z를 바꿔 꽂았으면 아래 두 줄을 맞바꾼다.
-AccelStepper lift(AccelStepper::DRIVER, 2, 5);
-AccelStepper pusher(AccelStepper::DRIVER, 4, 7);
+// test_lift_motor / test_pusher_motor 와 같음. 리프트=Z(D4/D7), 푸셔=X(D2/D5).
+AccelStepper lift(AccelStepper::DRIVER, LIFT_STEP_PIN, LIFT_DIR_PIN);
+AccelStepper pusher(AccelStepper::DRIVER, PUSHER_STEP_PIN, PUSHER_DIR_PIN);
 
 // CNC 쉴드 Resume=A2(RX), Hold=A1(TX). ESP 9600.
 SoftwareSerial esp(A2, A1);
 
 const int EN_PIN = 8;
-const float LIFT_MAX_SPEED = 650;
-const float LIFT_ACCEL = 320;
-const float PUSHER_MAX_SPEED = 550;
-const float PUSHER_ACCEL = 220;
+const float LIFT_UP_MAX_SPEED = 550;
+const float LIFT_UP_ACCEL = 220;
+const float LIFT_DOWN_MAX_SPEED = 800;
+const float LIFT_DOWN_ACCEL = 400;
+const float PUSHER_MAX_SPEED = 380;
+const float PUSHER_ACCEL = 150;
 const int MAX_LIFT_STEPS = 12000;
 const int MAX_PUSHER_STEPS = 20000;
 const unsigned long LIFT_TIMEOUT_MS = 25000;
@@ -34,7 +35,9 @@ char activeCmd[24] = "";
 unsigned long deadlineMs = 0;
 unsigned long lastProgMs = 0;
 uint16_t lastMm = 0;
+uint8_t tofHoldHits = 0;
 bool sensorOk = false;
+uint8_t lastLimitMask = 0;
 
 static char usbBuf[96];
 static uint8_t usbN = 0;
@@ -42,8 +45,61 @@ static char espBuf[96];
 static uint8_t espN = 0;
 static char outBuf[128];
 
+static uint8_t limitMask() {
+  uint8_t m = 0;
+  if (limitLiftBottomPressed()) {
+    m |= 1;
+  }
+  if (limitLiftTopPressed()) {
+    m |= 2;
+  }
+  if (limitPusherBackPressed()) {
+    m |= 4;
+  }
+  if (limitPusherFrontPressed()) {
+    m |= 8;
+  }
+  return m;
+}
+
+static const char *newLimitReason(uint8_t newly) {
+  if (newly & 4) {
+    return "limit_back";
+  }
+  if (newly & 8) {
+    return "limit_front";
+  }
+  if (newly & 1) {
+    return "limit_bottom";
+  }
+  if (newly & 2) {
+    return "limit_top";
+  }
+  return "limit";
+}
+
 static bool distanceOk(uint16_t mm) {
   return !sensorTimeoutOccurred() && mm > 0 && mm < 8000;
+}
+
+static bool tofHoldReached(uint16_t mm) {
+  if (!distanceOk(mm)) {
+    tofHoldHits = 0;
+    return false;
+  }
+  int d = (int)mm;
+  if (tofPastTarget(d)) {
+    tofHoldHits = TARGET_HOLD_COUNT;
+    return true;
+  }
+  if (tofInBand(d)) {
+    if (tofHoldHits < 255) {
+      tofHoldHits++;
+    }
+    return tofHoldHits >= TARGET_HOLD_COUNT;
+  }
+  tofHoldHits = 0;
+  return false;
 }
 
 static const char *stateName() {
@@ -131,18 +187,23 @@ static void doneNow(const ProtoMsg *msg, const char *reason, int mm) {
 }
 
 static void startLiftUp(const ProtoMsg *msg) {
-  if (!sensorOk) {
-    failNow(msg, "sensor");
+  if (limitLiftTopPressed()) {
+    doneNow(msg, "already", currentMm());
     return;
   }
-  uint16_t mm = sensorReadDistanceMm();
-  lastMm = mm;
-  if (distanceOk(mm) && mm <= TARGET_DISTANCE_MM) {
-    doneNow(msg, "already", (int)mm);
-    return;
+  if (sensorOk) {
+    uint16_t mm = sensorReadDistanceMm();
+    lastMm = mm;
+    if (distanceOk(mm) && tofReached((int)mm)) {
+      doneNow(msg, "already", (int)mm);
+      return;
+    }
   }
   remember(msg);
   replyAck();
+  tofHoldHits = 0;
+  lift.setMaxSpeed(LIFT_UP_MAX_SPEED);
+  lift.setAcceleration(LIFT_UP_ACCEL);
   lift.move(MAX_LIFT_STEPS * LIFT_UP);
   state = ST_LIFT_UP;
   deadlineMs = millis() + LIFT_TIMEOUT_MS;
@@ -156,6 +217,8 @@ static void startLiftDown(const ProtoMsg *msg) {
   }
   remember(msg);
   replyAck();
+  lift.setMaxSpeed(LIFT_DOWN_MAX_SPEED);
+  lift.setAcceleration(LIFT_DOWN_ACCEL);
   lift.move(MAX_LIFT_STEPS * LIFT_DOWN);
   state = ST_LIFT_DOWN;
   deadlineMs = millis() + LIFT_TIMEOUT_MS;
@@ -168,6 +231,9 @@ static void startPushFwd(const ProtoMsg *msg) {
   }
   remember(msg);
   replyAck();
+  lastLimitMask = limitMask();
+  pusher.setMaxSpeed(PUSHER_MAX_SPEED);
+  pusher.setAcceleration(PUSHER_ACCEL);
   pusher.move(MAX_PUSHER_STEPS * PUSHER_FORWARD);
   state = ST_PUSH_FWD;
   deadlineMs = millis() + PUSHER_TIMEOUT_MS;
@@ -180,6 +246,9 @@ static void startPushBack(const ProtoMsg *msg) {
   }
   remember(msg);
   replyAck();
+  lastLimitMask = limitMask();
+  pusher.setMaxSpeed(PUSHER_MAX_SPEED);
+  pusher.setAcceleration(PUSHER_ACCEL);
   pusher.move(MAX_PUSHER_STEPS * PUSHER_BACK);
   state = ST_PUSH_BACK;
   deadlineMs = millis() + PUSHER_TIMEOUT_MS;
@@ -266,19 +335,21 @@ static void pollMotion() {
     finishDone("limit_top", currentMm());
     return;
   }
-  if (state == ST_PUSH_FWD && limitPusherFrontPressed()) {
-    finishDone("limit_front", currentMm());
-    return;
-  }
-  if (state == ST_PUSH_BACK && limitPusherBackPressed()) {
-    finishDone("limit_back", currentMm());
-    return;
+
+  if (state == ST_PUSH_FWD || state == ST_PUSH_BACK) {
+    uint8_t mask = limitMask();
+    uint8_t newly = mask & ~lastLimitMask;
+    lastLimitMask = mask;
+    if (newly) {
+      finishDone(newLimitReason(newly), currentMm());
+      return;
+    }
   }
 
   if (state == ST_LIFT_UP && sensorOk && sensorRangeReady()) {
     uint16_t mm = sensorReadDistanceMm();
     lastMm = mm;
-    if (distanceOk(mm) && mm <= TARGET_DISTANCE_MM) {
+    if (tofHoldReached(mm)) {
       finishDone("tof", (int)mm);
       return;
     }
@@ -310,10 +381,11 @@ void setup() {
   pinMode(EN_PIN, OUTPUT);
   digitalWrite(EN_PIN, LOW);
 
-  lift.setMaxSpeed(LIFT_MAX_SPEED);
-  lift.setAcceleration(LIFT_ACCEL);
+  lift.setMaxSpeed(LIFT_DOWN_MAX_SPEED);
+  lift.setAcceleration(LIFT_DOWN_ACCEL);
   pusher.setMaxSpeed(PUSHER_MAX_SPEED);
   pusher.setAcceleration(PUSHER_ACCEL);
+  lastLimitMask = limitMask();
 
   sensorOk = sensorInit(500);
   if (sensorOk) {

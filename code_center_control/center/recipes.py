@@ -13,6 +13,7 @@ from dataclasses import dataclass
 class Step:
     cmd: str
     title: str
+    timeout: float | None = None
 
 
 RECIPES: dict[str, tuple[Step, ...]] = {
@@ -32,10 +33,19 @@ RECIPES: dict[str, tuple[Step, ...]] = {
         Step("pusher.back", "푸셔 복귀"),
         Step("lift.down", "리프트 하단 복귀"),
     ),
+    "deliver": (
+        Step("pusher.back", "밀기 전에 푸셔 원점"),
+        Step("lift.up", "배출 높이까지 상승"),
+        Step("pusher.forward", "책 밀기"),
+        Step("pusher.back", "푸셔 복귀"),
+        Step("lift.down", "리프트 하단 복귀"),
+        Step("robot.go", "책이 빠진 뒤 목적지로 이동", 300.0),
+    ),
 }
 
 RECIPE_HELP = {
     "home": "안전 원점. 수동 시험 시작 전에 씀",
     "discharge": "지금 맨 위 책 한 권을 밀어 냄. 쌓인 책을 반복할 때 이 레시피",
     "return_book": "원점 → 한 권 배출 → 리프트 내리기. 시연용 한 사이클",
+    "deliver": "책 한 권 배출이 끝나면 로봇이 목적지로 출발",
 }
