@@ -8,3 +8,4 @@ maps/*.txt
 maps/*.npz
 maps/*.npy
 maps/*.json
+maps/slots/

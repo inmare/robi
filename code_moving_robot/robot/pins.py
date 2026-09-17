@@ -27,6 +27,9 @@ SPIN_SPEED = 0.5
 FRONT_STOP_M = 0.35
 FRONT_STOP_DEG = 25.0
 ARRIVE_M = 0.15
+LOOKAHEAD_M = 0.45  # 경로 선 앞을 보고 조향. 옆에서 시작해도 다음 점으로 돌지 않게.
+ROUTE_LATERAL_M = 0.55  # 경로 옆에서 시작할 때 스캔 맞춤 폭
+REJOIN_OFF_M = 0.28  # 이보다 옆이면 A*로 선에 다시 붙음
 INFLATE_M = 0.16
 STALL_S = 3.0
 STALL_MOVE_M = 0.10  # 경로 남은 거리가 이만큼 줄어야 움직임. 제자리 회전·SLAM 흔들림은 무시.
@@ -46,6 +49,11 @@ RECOVER_REVERSE_S = 6.0
 RECOVER_WAIT_S = 2.5
 RECOVER_TURN_S = 4.0
 RECOVER_HOP_S = 3.0
+SURVEY_RAD = 0.70  # 막힌 뒤 좌우로 돌아 스캔을 넓힘
+SURVEY_TURN_S = 3.5
+SCAN_DISK_MAX_M = 1.20
+SCAN_DISK_R = 0.16
+SCAN_DISK_FRONT_DEG = 55.0
 
 # 테스트 주행 때 경로를 시간마다 찍는다. 시연은 저장 JSON을 재생.
 RECORD_DT = 1.0

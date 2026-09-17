@@ -13,6 +13,7 @@ from robot.recover import (
     choose_detour,
     hit_corridor,
     pick_side,
+    rejoin_path,
     skip_blocked,
     skip_near,
     splice_path,
@@ -118,6 +119,28 @@ def test_splice_skips_hit():
     assert path[-1][0] > 1.0
 
 
+def test_rejoin_from_side_reaches_path():
+    grid = OccupancyGrid(size_m=8.0, resolution=0.05)
+    odo = FakeOdo(0.4, 0.45)
+    rest = [(0.4, 0.0), (0.8, 0.0), (1.6, 0.0)]
+
+    path = rejoin_path(grid, odo, rest, extra_disks=None)
+    assert len(path) >= 2
+    assert path[-1][0] > 1.2
+
+
+def test_rejoin_goes_around_new_disk():
+    grid = OccupancyGrid(size_m=8.0, resolution=0.05)
+    odo = FakeOdo(0.0, 0.0)
+    rest = [(0.3, 0.0), (1.5, 0.0)]
+
+    path = rejoin_path(grid, odo, rest, extra_disks=[(0.45, 0.0, 0.22)])
+    assert len(path) >= 2
+    assert path[-1][0] > 1.2
+    for p in path:
+        assert math.hypot(p[0] - 0.45, p[1] - 0.0) > 0.16, p
+
+
 if __name__ == "__main__":
     test_pick_right_when_left_blocked()
     test_pick_none_when_both_close()
@@ -129,4 +152,6 @@ if __name__ == "__main__":
     test_plan_refuses_goal_in_disk()
     test_splice_skips_hit()
     test_splice_does_not_reenter_hit()
+    test_rejoin_from_side_reaches_path()
+    test_rejoin_goes_around_new_disk()
     print("recover_test ok")

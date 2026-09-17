@@ -10,7 +10,7 @@
 
 - `docs/moving_stack.md` — 폴더·라이브러리
 - `docs/lidar.md` — 라이다 SDK·모터 정지
-- `docs/route.md` — 수동 지도와 경로 이동 사용법
+- `docs/route.md` — 슬롯 TUI와 경로 왕복 사용법
 - `docs/moving_robot.md` — 기구·전원
 
 # 부품

@@ -22,7 +22,13 @@ from robot.pins import (
     RECOVER_TURN_RAD,
     RECOVER_TURN_S,
     RECOVER_WAIT_S,
+    REJOIN_OFF_M,
+    SCAN_DISK_FRONT_DEG,
+    SCAN_DISK_MAX_M,
+    SCAN_DISK_R,
     SPIN_SPEED,
+    SURVEY_RAD,
+    SURVEY_TURN_S,
     VIRTUAL_BLOCK_M,
 )
 from robot.planner import plan
@@ -249,6 +255,80 @@ def splice_path(grid, odo, rest, extra_disks):
     return thin_path(path)
 
 
+def merge_disk(disks, disk, cell=0.14, cap=48):
+    x, y, r = disk
+    for i, d in enumerate(disks):
+        if math.hypot(d[0] - x, d[1] - y) < cell:
+            disks[i] = ((d[0] + x) / 2.0, (d[1] + y) / 2.0, max(d[2], r))
+            return
+    disks.append(disk)
+    if len(disks) > cap:
+        del disks[0 : len(disks) - cap]
+
+
+def scan_hits_to_disks(odo, points, grid=None, max_m=SCAN_DISK_MAX_M, radius=SCAN_DISK_R):
+    """맵에 없던 가까운 전방 히트만 가상 장애물로. 벽 칸은 빼서 A*가 복도를 막지 않게."""
+    if not points:
+        return []
+    half = math.radians(SCAN_DISK_FRONT_DEG)
+    out = []
+    for ang, rng in points:
+        if rng < 0.15 or rng > max_m:
+            continue
+        if abs(wrap_angle(ang)) > half:
+            continue
+        wx = odo.x + rng * math.cos(odo.yaw + ang)
+        wy = odo.y + rng * math.sin(odo.yaw + ang)
+        if grid is not None:
+            cell = grid.world_to_cell(wx, wy)
+            if cell is not None and grid.log_odds[cell[0]][cell[1]] > 0.5:
+                continue
+        merge_disk(out, (wx, wy, radius), cell=0.12, cap=24)
+    return out
+
+
+def look_ahead_target(here, rest, min_m=0.55, max_skip=14):
+    if not rest:
+        return None, 0
+    for i, p in enumerate(rest):
+        if i > max_skip:
+            break
+        if math.hypot(p[0] - here[0], p[1] - here[1]) >= min_m:
+            return (float(p[0]), float(p[1])), i
+    last = rest[-1]
+    return (float(last[0]), float(last[1])), len(rest) - 1
+
+
+def rejoin_path(grid, odo, rest, extra_disks, scan=None):
+    """지금 자리에서 원래 경로의 앞쪽 점으로 A* 후 나머지를 잇는다."""
+    rest = [(float(p[0]), float(p[1])) for p in (rest or [])]
+    disks = list(extra_disks or [])
+    if scan:
+        for d in scan_hits_to_disks(odo, scan, grid=grid):
+            merge_disk(disks, d)
+    rest = skip_blocked(rest, disks)
+    if not rest:
+        return []
+    here = (odo.x, odo.y)
+    off = dist_to_polyline(here, rest)
+    first_hit = seg_hits_disks(here, rest[0], disks, pad=0.18) or point_in_disks(
+        rest[0], disks
+    )
+    if off < REJOIN_OFF_M and not first_hit:
+        return splice_path(grid, odo, rest, extra_disks)
+    for min_m in (0.45, 0.85, 1.30):
+        tgt, idx = look_ahead_target(here, rest, min_m=min_m)
+        if tgt is None:
+            break
+        if point_in_disks(tgt, disks, pad=0.12):
+            continue
+        chunk = plan(grid, here, tgt, extra_disks=disks)
+        if len(chunk) >= 2:
+            tail = rest[idx + 1 :]
+            return thin_path(chunk + tail)
+    return splice_path(grid, odo, rest, disks)
+
+
 class Recoverer:
     def __init__(self):
         self.state = "idle"
@@ -264,6 +344,9 @@ class Recoverer:
         self._rest = []
         self._turn_rad = RECOVER_TURN_RAD
         self._hop_m = RECOVER_SIDE_M
+        self._survey_phase = 0
+        self._survey_targets = []
+        self._grid = None
         self.log = None
 
     def active(self):
@@ -281,7 +364,15 @@ class Recoverer:
         self.state = "idle"
         self.log = None
 
-    def start(self, odo, reason, target=None, rest=None):
+    def ingest_scan(self, odo, scan, grid=None):
+        if grid is not None:
+            self._grid = grid
+        if not scan:
+            return
+        for d in scan_hits_to_disks(odo, scan, grid=self._grid):
+            merge_disk(self.disks, d)
+
+    def start(self, odo, reason, target=None, rest=None, grid=None):
         self.state = "reverse"
         self.reason = reason
         self.tries += 1
@@ -290,6 +381,7 @@ class Recoverer:
         self._stuck = (odo.x, odo.y, odo.yaw)
         self._target = target
         self._rest = list(rest or [])
+        self._grid = grid
         if target is not None and not self._rest:
             self._rest = [target]
         self.disks.extend(hit_corridor(odo.x, odo.y, odo.yaw))
@@ -310,6 +402,8 @@ class Recoverer:
             return self._reverse(drive, odo, now)
         if self.state == "wait_lidar":
             return self._wait_lidar(drive, odo, scan, now)
+        if self.state == "survey":
+            return self._survey(drive, odo, scan, now)
         if self.state == "turn":
             return self._turn(drive, odo, now)
         if self.state == "hop":
@@ -345,33 +439,70 @@ class Recoverer:
     def _wait_lidar(self, drive, odo, scan, now):
         drive.stop(odo)
         if scan and len(scan) >= 12:
-            rest = skip_blocked(self._rest, self.disks)
-            side, left, right = choose_detour(
-                scan, odo.x, odo.y, odo.yaw, rest, disks=self.disks
-            )
-            if side == 0:
-                return self._fail(
-                    drive,
-                    odo,
-                    f"좌우 막힘 L={left:.2f} R={right:.2f}",
-                )
-            self.side = side
-            name = "왼쪽" if side > 0 else "오른쪽"
-            self._turn_rad = RECOVER_TURN_RAD
-            self._hop_m = RECOVER_SIDE_M
-            if min(left, right) < 0.35:
-                self._turn_rad = min(self._turn_rad, 0.32)
-                self._hop_m = min(self._hop_m, 0.16)
-            self._target_yaw = wrap_angle(odo.yaw + side * self._turn_rad)
-            self.state = "turn"
+            self.ingest_scan(odo, scan, self._grid)
+            self._survey_phase = 0
+            self._survey_targets = [
+                wrap_angle(odo.yaw + SURVEY_RAD),
+                wrap_angle(odo.yaw - SURVEY_RAD),
+                wrap_angle(odo.yaw),
+            ]
+            self._target_yaw = self._survey_targets[0]
+            self.state = "survey"
             self._t0 = now
-            self.log = (
-                f"{name} 우회(경로쪽)  L={left:.2f}m R={right:.2f}m  "
-                f"각 {math.degrees(self._turn_rad):.0f}° 옆 {self._hop_m:.2f}m"
-            )
+            self.log = "주변 수색 왼쪽"
             return None
         if now - self._t0 >= RECOVER_WAIT_S:
             return self._fail(drive, odo, "라이다가 다시 안 돕니다")
+        return None
+
+    def _survey(self, drive, odo, scan, now):
+        if scan:
+            self.ingest_scan(odo, scan, self._grid)
+        err = wrap_angle(self._target_yaw - odo.yaw)
+        done = abs(err) < 0.14 or now - self._t0 >= SURVEY_TURN_S
+        if done:
+            drive.stop(odo)
+            self._survey_phase += 1
+            if self._survey_phase >= len(self._survey_targets):
+                return self._after_survey(drive, odo, scan, now)
+            self._target_yaw = self._survey_targets[self._survey_phase]
+            self._t0 = now
+            names = ("왼쪽", "오른쪽", "정면")
+            self.log = f"주변 수색 {names[min(self._survey_phase, 2)]}"
+            return None
+        spin = SPIN_SPEED * 0.85
+        if err > 0:
+            drive.set_speeds(-spin, spin, odo)
+        else:
+            drive.set_speeds(spin, -spin, odo)
+        return None
+
+    def _after_survey(self, drive, odo, scan, now):
+        rest = skip_blocked(self._rest, self.disks)
+        side, left, right = choose_detour(
+            scan or [], odo.x, odo.y, odo.yaw, rest, disks=self.disks
+        )
+        if side == 0:
+            drive.stop(odo)
+            self.state = "idle"
+            self.log = (
+                f"수색 끝. 좌우 좁음 L={left:.2f} R={right:.2f}. 경로 재연결"
+            )
+            return "ok"
+        self.side = side
+        name = "왼쪽" if side > 0 else "오른쪽"
+        self._turn_rad = RECOVER_TURN_RAD
+        self._hop_m = RECOVER_SIDE_M
+        if min(left, right) < 0.35:
+            self._turn_rad = min(self._turn_rad, 0.32)
+            self._hop_m = min(self._hop_m, 0.16)
+        self._target_yaw = wrap_angle(odo.yaw + side * self._turn_rad)
+        self.state = "turn"
+        self._t0 = now
+        self.log = (
+            f"{name} 우회(경로쪽)  L={left:.2f}m R={right:.2f}m  "
+            f"각 {math.degrees(self._turn_rad):.0f}° 옆 {self._hop_m:.2f}m"
+        )
         return None
 
     def _turn(self, drive, odo, now):

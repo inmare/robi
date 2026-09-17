@@ -3,62 +3,156 @@
 우노 위에 SZH-ET004 CNC 쉴드, A4988 4개 꽂힌 상태.  
 STEP·DIR·EN은 쉴드가 이미 이어 줌. 모터·센서·스위치 선은 쉴드 헤더에 바로 꽂음.
 
-코드 `AccelStepper lift(AccelStepper::DRIVER, 2, 5)` = 쉴드 X축. Enable은 D8, LOW면 켜짐.
+모터는 X·Z만 씀.  
+코드 `AccelStepper lift(AccelStepper::DRIVER, 2, 5)` = 쉴드 X축.  
+푸셔는 `AccelStepper pusher(AccelStepper::DRIVER, 4, 7)` = 쉴드 Z축.  
+Enable은 D8, LOW면 켜짐.
+
+ESP8266을 붙여도 위 모터·리미트·I2C 핀은 그대로다.  
+우노를 ESP로 바꾸지 말 것. ESP-01은 쉴드 `Hold`/`Resume`에만 전선으로 붙인다.
 
 | 쉴드에서 꽂는 곳 | 아두이노 | 역할 |
 |---|---|---|
 | X 모터 4핀 | D2 STEP, D5 DIR | 리프트 KH42JM2-901 |
-| Y 모터 4핀 | D3 STEP, D6 DIR | 푸셔 17HS4401 |
-| Z 모터 4핀 | D4 STEP, D7 DIR | 안 씀 |
+| Y 모터 4핀 | D3 STEP, D6 DIR | 안 씀 |
+| Z 모터 4핀 | D4 STEP, D7 DIR | 푸셔 17HS4401 |
 | A 모터 4핀 | D12 STEP, D13 DIR | 안 씀 |
 | (공통, 전선 없음) | D8 EN | 드라이버 4개 같이. LOW=켜짐 |
 | END STOPS `X-` | D9 | 리프트 하단 리미트 |
 | END STOPS `Y-` | D10 | 리프트 상단 리미트 |
-| END STOPS `Z-` | D11 | 푸셔 후진 리미트 (4개일 때) |
-| `Abort` | A0 | 푸셔 전진 리미트 (4개일 때) |
+| END STOPS `Z-` | D11 | 푸셔 후진 리미트 |
+| `Abort` | A0 | 푸셔 전진 리미트 |
+| `Hold` | A1 | ESP-01 RX (우노 → ESP, 분압) |
+| `Resume` | A2 | ESP-01 TX (ESP → 우노) |
 | I2C `SDA` | A4 | VL53L0X D |
 | I2C `SCL` | A5 | VL53L0X C |
-| I2C / END STOPS `+` | 5V | 센서·스위치 전원 |
+| I2C / END STOPS `+` | 5V | 센서·스위치 전원. ESP VCC에 넣지 말 것 |
 | I2C / END STOPS `-` | GND | 공통 GND |
 | 파란 나사 단자 + | — | 모터 12V + |
 | 파란 나사 단자 − | — | 모터 12V −, 우노 GND와 공통 |
 
-USB는 우노·쉴드 로직만. 모터 12V를 VIN에 넣지 말 것. D0/D1은 USB 시리얼이라 전선 꽂지 말 것.
+USB는 우노·쉴드 로직만. 모터 12V를 VIN에 넣지 말 것. D0/D1은 USB 시리얼이라 전선 꽂지 말 것. ESP도 D0/D1에 꽂지 말 것.
 
 ```
   D13  A축 DIR (안 씀)
   D12  A축 STEP (안 씀)
-  D11  END STOPS Z-  푸셔 후진
-  D10  END STOPS Y-  리프트 상단
-   D9  END STOPS X-  리프트 하단
+  D11  END STOPS Z-  푸셔 후진 리미트
+  D10  END STOPS Y-  리프트 상단 리미트
+   D9  END STOPS X-  리프트 하단 리미트
    D8  EN (LOW=켜짐)
-   D7  Z축 DIR (안 씀)
-   D6  Y축 DIR  푸셔
+   D7  Z축 DIR  푸셔
+   D6  Y축 DIR (안 씀)
    D5  X축 DIR  리프트
-   D4  Z축 STEP (안 씀)
-   D3  Y축 STEP 푸셔
+   D4  Z축 STEP 푸셔
+   D3  Y축 STEP (안 씀)
    D2  X축 STEP 리프트
    D1  TX 꽂지 말 것
    D0  RX 꽂지 말 것
-  A0   Abort    푸셔 전진 (4개일 때)
-  A1   Hold     예비
-  A2   Resume   예비
+  A0   Abort    푸셔 전진 리미트
+  A1   Hold     ESP-01 RX (우노 TX, 분압)
+  A2   Resume   ESP-01 TX (우노 RX)
   A3   CoolEn   예비
   A4   I2C SDA  VL53L0X D
   A5   I2C SCL  VL53L0X C
 ```
 
+# 적재함 — ESP8266 (ESP-01)
+
+우노·CNC 쉴드는 그대로 둔다. 우노 자리에 NodeMCU·D1을 꽂으면 핀 번호가 전부 어긋나고, 쉴드 D8(EN)·D10(상단 리미트)이 ESP 부트 핀과 겹쳐 켜지지 않을 수 있다.
+
+모터 X/Z, EN, 리미트, VL53L0X는 **한 핀도 안 옮긴다.**  
+쓰는 칸은 예비였던 `Hold`(A1), `Resume`(A2), 그리고 **3.3V·GND**뿐.
+
+ESP는 3.3V. 쉴드 I2C `5V` / END STOPS `+` / 우노 5V를 VCC에 넣으면 모듈이 죽는다.  
+우노 보드의 3.3V 핀은 전류가 작아서(수십 mA) ESP를 켜기에 부족하다.  
+적재함 5V 컨버터 뒤에 AMS1117-3.3 같은 **3.3V 모듈**을 따로 쓴다. 그 GND는 우노 GND와 공통.
+
+## 배선
+
+TX끼리 꽂지 말고 **TX → RX**로 엇갈림.
+
+| ESP-01 | 쉴드 / 전원 | 아두이노 | 역할 |
+|---|---|---|---|
+| `VCC` | 3.3V 레귤레이터 + | — | 모듈 전원. 5V 금지 |
+| `GND` | I2C `-` 또는 END STOPS `-` | GND | 우노·3.3V 모듈과 공통 |
+| `TX` | `Resume` | A2 | ESP → 우노. 코드에서 SoftwareSerial RX |
+| `RX` | `Hold` | A1 | 우노 → ESP. **반드시 3.3V로 낮춤** |
+| `CH_PD` / `CH_EN` | 3.3V | — | 안 올리면 모듈이 꺼진 채로 있음 |
+| `RST` | 3.3V, 또는 안 꽂음 | — | LOW면 리셋. 떠 두면 리셋이 불안정할 수 있음 |
+| `GPIO0` | 3.3V | — | HIGH=실행(AT 펌웨어). GND에 붙이면 업로드 모드 |
+| `GPIO2` | 안 꽂음 | — | 부트 때 LOW면 안 됨. 전선 꽂지 말 것 |
+
+우노 A1은 5V다. ESP `RX`에 바로 넣지 말 것.
+
+- 분압: 우노 A1 → 1kΩ → ESP `RX`와 2kΩ의 만남 → 2kΩ → GND. ESP 쪽이 약 3.3V.
+- 또는 3.3V/5V 레벨시프터 TX 채널.
+
+ESP `TX`(3.3V) → 우노 A2는 그대로 된다. 우노가 HIGH로 읽음.
+
+`Hold`/`Resume` 실크가 보드마다 `A1`/`A2`와 칸 순서가 다를 수 있으니 **글자 `Hold` `Resume`에 맞춰** 꽂을 것.
+
+## 코드에서 쓰는 핀
+
+USB 모니터는 계속 D0/D1, 115200.  
+ESP와는 소프트시리얼.
+
+```
+SoftwareSerial esp(A2, A1);  // RX=Resume, TX=Hold
+esp.begin(9600);
+```
+
+우노 소프트시리얼은 115200이 깨진다. ESP AT 기본이 115200이면 USB-TTL로 한 번만 `AT+UART_DEF=9600,8,1,0,0` 하고 전원 다시 넣기.
+
+SSID·비번은 핀이 아니다. 코드 상수로만 넣고 이 문서에는 적지 말 것.
+
+## Wi-Fi 설정 (AT 펌웨어)
+
+ESP-01은 공장 AT 펌웨어 기준. 아두이노 스케치를 ESP에 구워 둔 모듈이면 AT가 안 나온다. 그때는 AT 펌웨어를 다시 넣거나, 모듈을 시리얼 브리지로 쓰는 쪽을 고른다.
+
+우노가 ESP로 보내는 문자 (줄끝 `\r\n`):
+
+1. `AT` — 모듈이 살아 있으면 `OK`
+2. `AT+CWMODE=1` — 스테이션(공유기 접속)만. AP로 안 띄움
+3. `AT+CWJAP="SSID","PASSWORD"` — 공유기 접속. 성공하면 `WIFI CONNECTED` 그다음 `WIFI GOT IP` 그다음 `OK`
+4. `AT+CIFSR` — 받은 IP. `STAIP,"192.168.x.x"` 가 보이면 된 것
+5. `AT+CIPMUX=1` 후 `AT+CIPSERVER=1,8080` — 중앙이 TCP로 붙을 서버를 켤 때. 나중에 통신 넣을 때
+
+접속 정보는 리셋하면 날아갈 수 있다. 유지하려면 `AT+CWJAP` 대신 `AT+CWJAP_DEF="SSID","PASSWORD"`.
+
+## 연결 여부 확인
+
+업로드는 우노만. ESP는 이미 꽂힌 채로 시리얼만 보면 된다.
+
+```
+pio device monitor -b 115200
+```
+
+우노 스케치가 ESP 응답을 USB로 그대로 찍어 주면 아래가 보인다.
+
+| 확인 | 성공 | 실패 |
+|---|---|---|
+| `AT` | `OK` | 무응답: 전원·CH_PD·TX/RX 교차·보레이트 |
+| `AT+CWJAP=...` | `WIFI CONNECTED` / `WIFI GOT IP` | `FAIL` / `+CWJAP:1` 비번, `:2` 못 찾음, `:3` 접속 실패, `:4` 실패 |
+| `AT+CIFSR` | `STAIP`에 공유기 대역 IP | `0.0.0.0` 이면 아직 미접속 |
+| `AT+CIPSTATUS` | `STATUS:2` IP 받음, `STATUS:3` TCP 연결됨 | `STATUS:4` 끊김, `STATUS:5` Wi-Fi 없음 |
+| PC에서 `ping 그IP` | 응답 | 같은 공유기인지, 격리(AP isolation)인지 |
+| ESP-01S 파란 LED | 켜질 때·통신 때 깜빡 | 아예 꺼짐이면 전원/CH_PD |
+
+`STATUS:2` 까지면 와이파이는 된 것이다. 중앙 컨트롤 TCP는 그 다음이다.
+
+테스트할 때 모터 12V는 꺼 두고 USB+3.3V만 켜도 된다. ESP GND와 우노 GND는 반드시 같이.
+
 # 적재함 — A4988 (CNC 쉴드)
 
 드라이버는 이미 소켓에 있음. STEP/DIR/VDD/GND/RESET/SLEEP은 안 건드림.
 
-리프트 = X 자리, 푸셔 = Y 자리. Z·A는 꽂혀 있어도 모터 선만 안 꽂으면 됨.
+리프트 = X 자리, 푸셔 = Z 자리. Y·A는 꽂혀 있어도 모터 선만 안 꽂으면 됨.
 
-## 모터 선 (X / Y 옆 4핀)
+## 모터 선 (X / Z 옆 4핀)
 
 실크는 `1A 1B 2A 2B` 또는 `A+ A- B+ B-`.
 
-| 쉴드 핀 | KH42JM2-901 (X, 리프트) | 17HS4401 (Y, 푸셔) |
+| 쉴드 핀 | KH42JM2-901 (X, 리프트) | 17HS4401 (Z, 푸셔) |
 |---|---|---|
 | 1A | 코일 1 한쪽 | 코일 1 한쪽 |
 | 1B | 코일 1 다른쪽 | 코일 1 다른쪽 |
@@ -82,37 +176,70 @@ KH42는 약 1.2A/상, 17HS4401은 약 1.7A/상. A4988은 방열판 있어도 1.2
 
 # 적재함 — VL53L0X (ToF)
 
-쉴드 I2C 헤더에 꽂음. 우노 A4/A5로 이어져 있음. 우노 핀에 직접 꽂지 말 것.
+스위치가 아님. **END STOPS `X-` `Y-` `Z-`에 꽂지 말 것.**  
+우노 위는 쉴드가 덮고 있어서 A4/A5에 직접 꽂지 말고, 쉴드에 `SCL` `SDA`라고 적힌 **I2C 4핀 헤더**에 꽂음. 우노 A4=SDA, A5=SCL로 이미 이어져 있음.
 
-| VL53L0X | 쉴드 |
-|---|---|
-| − / GND | I2C GND 또는 END STOPS `-` |
-| + / VIN / 5V | I2C 5V 또는 END STOPS `+` |
-| C / SCL | I2C SCL (A5) |
-| D / SDA | I2C SDA (A4) |
+실크는 보통 `SCL` `SDA` `5V`(또는 `+`) `GND`(또는 `-`). 칸 순서는 보드마다 다르니 **글자에 맞춰** 꽂을 것.
+
+| VL53L0X 모듈 | 쉴드 I2C 헤더 | 아두이노 |
+|---|---|---|
+| `D` / SDA | `SDA` | A4 |
+| `C` / SCL | `SCL` | A5 |
+| `+` / VIN / 5V | I2C `5V` / `+` | 5V |
+| `−` / GND | I2C `GND` / `-` | GND |
+
+I2C `5V`/`GND` 칸이 없으면 END STOPS 줄의 **흰색 `+`(5V)** 와 **GND**를 전원만 빌려도 됨. 신호는 계속 `SDA`/`SCL`.
 
 `GPIO1`, `XSHUT`은 꽂지 않아도 됨. XSHUT을 쓸 거면 5V에 올려 두거나 떠 두지 말 것.
+
+테스트: `pio run -e test_sensor -t upload` 후 `pio device monitor -b 115200`.
+
+# 적재함 — END STOPS가 뭐길래
+
+원래 이 쉴드는 GRBL CNC(라우터·밀링)용이다. 각 축이 레일 끝에 부딪히지 않게 리미트·원점 스위치를 꽂는 칸이 `END STOPS`다.
+
+아두이노가 “엔드스톱 전용 하드웨어”를 가진 게 아니다. 쉴드가 우노 디지털 핀을 헤더로만 꺼내 둔 것이다.
+
+| 쉴드 칸 | 아두이노 핀 | GRBL 원래 용도 | 지금 적재함 |
+|---|---|---|---|
+| `X-` / `X+` | D9 (둘 다 같은 핀) | X축 최소·최대 리미트 | 리프트 하단 |
+| `Y-` / `Y+` | D10 (둘 다 같은 핀) | Y축 최소·최대 리미트 | 리프트 상단 |
+| `Z-` / `Z+` | D11 (둘 다 같은 핀) | Z축 최소·최대 리미트 | 푸셔 후진 |
+
+모터를 X·Z에 꽂아도 END STOPS `Y-`는 그냥 D10이다. Y 모터를 안 써도 스위치 입력으로 써도 된다.
+
+이 쉴드는 축마다 `+`/`-`가 **한 핀**이라, 리프트 상·하단을 `X-`와 `X+`에 나눠 꽂으면 구분 못 한다. `+` 칸은 비우고, 스위치 4개면 `X-` `Y-` `Z-` 세 칸 + `Abort`(A0)를 쓴다.
 
 # 적재함 — 리미트 스위치 (KW-10R)
 
 스위치는 `C`(공통), `NO`, `NC`.  
-`C` → 쉴드 GND (`END STOPS`의 `-`), `NO` → 아래 신호 핀. 우노 내부 풀업. 눌리면 LOW.
+`C` → 쉴드 GND (`END STOPS`의 `-`), `NO` → 아래 신호 핀. 우노 내부 풀업. 눌리면 LOW.  
+`NC`는 꽂지 않음.
 
-`X-`와 `X+`는 같은 아두이노 핀(D9). `Y-`/`Y+`는 D10, `Z-`/`Z+`는 D11.  
-한 축의 +/−에 스위치 두 개를 나눠 꽂으면 어느 쪽인지 구분 못 함. + 칸은 비움.
+END STOPS XYZ에 연결해도 된다. 그게 원래 리미트 스위치 칸이다.
+
+## 4개 (리프트 + 푸셔) — 현재
+
+| 스위치 | 쉴드 | 아두이노 | 코드 핀 |
+|---|---|---|---|
+| 리프트 하단 C | END STOPS `-` | GND | — |
+| 리프트 하단 NO | END STOPS `X-` | D9 | `PIN_LIFT_BOTTOM` |
+| 리프트 상단 C | END STOPS `-` | GND | — |
+| 리프트 상단 NO | END STOPS `Y-` | D10 | `PIN_LIFT_TOP` (Y 모터 안 씀, D10만 사용) |
+| 푸셔 후진 C | END STOPS `-` | GND | — |
+| 푸셔 후진 NO | END STOPS `Z-` | D11 | `PIN_PUSHER_BACK` |
+| 푸셔 전진 C | Abort 옆 GND, 또는 END STOPS `-` | GND | — |
+| 푸셔 전진 NO | `Abort` | A0 | `PIN_PUSHER_FRONT` |
+
+`Hold`(A1)·`Resume`(A2)는 ESP-01 UART. 스위치를 여기 꽂지 말 것. 푸셔 전진은 `Abort`(A0)만. 예비는 `CoolEn`(A3).
+
+테스트: 모터 12V는 꺼 두고 USB만 연결.  
+`pio run -e test_limit_switch -t upload` 후 `pio monitor -b 115200`.  
+손으로 각 레버를 누르면 해당 항목이 `열림` → `눌림`으로 바뀜.
 
 ## 2개만 (리프트만)
 
-| 스위치 | 쉴드 | 아두이노 |
-|---|---|---|
-| 리프트 하단 C | END STOPS `-` | GND |
-| 리프트 하단 NO | END STOPS `X-` | D9 |
-| 리프트 상단 C | END STOPS `-` | GND |
-| 리프트 상단 NO | END STOPS `Y-` | D10 |
-
-푸셔 리미트는 아직 없음. 푸셔는 스텝 수·시간 초과로만 멈춤.
-
-## 4개 (리프트 + 푸셔)
+푸셔 스위치를 아직 안 꽂을 때. 후진·전진은 시리얼에 계속 `열림`.
 
 | 스위치 | 쉴드 | 아두이노 |
 |---|---|---|
@@ -120,12 +247,6 @@ KH42는 약 1.2A/상, 17HS4401은 약 1.7A/상. A4988은 방열판 있어도 1.2
 | 리프트 하단 NO | END STOPS `X-` | D9 |
 | 리프트 상단 C | END STOPS `-` | GND |
 | 리프트 상단 NO | END STOPS `Y-` | D10 |
-| 푸셔 후진 C | END STOPS `-` | GND |
-| 푸셔 후진 NO | END STOPS `Z-` | D11 |
-| 푸셔 전진 C | Abort 옆 GND, 또는 END STOPS `-` | GND |
-| 푸셔 전진 NO | `Abort` | A0 |
-
-`Hold`(A1)는 예비. 푸셔 전진을 여기 꽂아도 됨. 그때는 코드도 A1로.
 
 # 이동로봇 — N7960 모터 드라이버 (VLT-MD010) 2개
 
@@ -194,17 +315,29 @@ RPWM/LPWM/EN은 전부 파이 GPIO 3.3V. VCC만 5V. 파이 GPIO에 5V를 넣지 
 
 GPIO20(물리 38), GPIO6(물리 31)은 나중에 방향 판별용 홀2. 지금은 비움.
 
-# 이동로봇 — 리미트 스위치 (KW-10R) · IR
+# 이동로봇 — 주차 리미트 스위치 (KW-10R) 2개
 
-스위치는 보통 `C`(공통), `NO`, `NC`.  
-`C` → GND, `NO` → GPIO. 파이 내부 풀업 사용. 눌리면 LOW.
+적재함 앞에 로봇이 닿았는지 보는 스위치. **적재함 아두이노·CNC 쉴드에 꽂지 말 것.** 파이 GPIO로 읽음.
+
+적재함 리프트/푸셔 리미트(`X-` `Y-` `Z-` `Abort`)와 별개. 주차 2개를 더해도 적재함 핀과 안 겹침.
+
+스위치는 `C`(공통), `NO`, `NC`.  
+`C` → 파이 GND, `NO` → GPIO. 파이 내부 풀업. 눌리면 LOW.  
+`NC`는 꽂지 않음. GPIO는 3.3V. 5V를 GPIO에 넣지 말 것.
+
+| 스위치 | 모듈 | 파이 |
+|---|---|---|
+| 왼쪽 주차 | `NO` | GPIO23 (물리 16) |
+| 왼쪽 주차 | `C` | 물리 25 GND |
+| 오른쪽 주차 | `NO` | GPIO22 (물리 15) |
+| 오른쪽 주차 | `C` | 물리 9 GND |
+
+물리 9 GND는 캠 UART GND와 같이 써도 됨. 같은 GND.
+
+# 이동로봇 — IR 브레이크 빔
 
 | 부품 | 파이 |
 |---|---|
-| 왼쪽 주차 리미트 NO | GPIO23 (물리 16) |
-| 왼쪽 주차 리미트 C | 물리 25 GND |
-| 오른쪽 주차 리미트 NO | GPIO22 (물리 15) |
-| 오른쪽 주차 리미트 C | 물리 9 GND |
 | IR 브레이크 빔 DO | GPIO24 (물리 18) |
 | IR VCC | 모듈이 5V면 물리 4와 같은 5V 버스. DO가 5V이면 분압 |
 | IR GND | 물리 34 GND |
@@ -284,15 +417,15 @@ USB·이더넷이 있는 변의 **반대쪽** 긴 헤더. 핀 1은 사각형 패
   (3) 비움                   (4) 5V    드라이버 VCC (왼·오른 같이)
   (5) 비움                   (6) GND   파이 전원 GND
   (7) GPIO4   오른 L_EN      (8) GPIO14 파이 TX → 캠 RX
-  (9) GND     캠·오른 리미트 (10) GPIO15 파이 RX ← 캠 TX
+  (9) GND     캠·오른 주차 C (10) GPIO15 파이 RX ← 캠 TX
  (11) GPIO17  오른 R_EN      (12) GPIO18 왼 RPWM
  (13) GPIO27  왼 R_EN        (14) GND   왼 드라이버
- (15) GPIO22  오른 리미트    (16) GPIO23 왼 리미트
+ (15) GPIO22  오른 주차 NO   (16) GPIO23 왼 주차 NO
  (17) 3.3V    오른홀 VCC     (18) GPIO24 IR DO
  (19) 비움                   (20) GND   오른 드라이버
  (21) 비움                   (22) 비움
  (23) 비움                   (24) 비움
- (25) GND     왼 리미트      (26) 비움
+ (25) GND     왼 주차 C      (26) 비움
  (27) 꽂지 말 것             (28) 꽂지 말 것
  (29) GPIO5   왼 홀 DO       (30) 비움
  (31) GPIO6   비움(홀2 예비) (32) GPIO12 오른 RPWM

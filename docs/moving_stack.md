@@ -7,7 +7,7 @@
 관련 문서:
 
 - `docs/lidar.md` — X4 Pro SDK, DTR 모터, 체크섬 로그, SSH로 지도 보기
-- `docs/route.md` — 수동 지도 + 시작/경유/도착 후 자율 이동
+- `docs/route.md` — 슬롯 TUI, 왕복 재생, 중간 출발, 장애 수색 후 재연결
 - `docs/moving_robot.md` — 기구·전원
 - `code_moving_robot/readme.md` — 짧은 색인만
 
@@ -24,13 +24,20 @@ code_moving_robot/
     localize.py    스캔-맵 상관 맞춤
     slam.py        스캔-투-맵 SLAM. 홀은 예측, 라이다가 포즈
     planner.py     A*
-    follow.py      경로 점 추종
+    follow.py      경로 선 look-ahead 추종
+    path.py        왕복·선 투영
+    recover.py     후진·수색·A* 재연결
+    slots.py       슬롯 4개 이름·시각
+    tui.py         메뉴·키
+    session.py     주행 루프
   tests/
     motor_test.py, hall_test.py, hall_motor_test.py
     lidar_test.py, lidar_stop.py, map_scan_test.py
+    path_test.py, recover_test.py, slots_test.py
   route/
-    route_run.py   지도 작성 + 경로 주행
-  maps/            pgm·json. git에 안 올림
+    route_run.py   옛 단일 경로. 새 시연은 main.py
+  main.py          슬롯 TUI + 왕복 주행
+  maps/            pgm·json·slots/. git에 안 올림
   lidar_build_script.sh
   .venv/
 ```
@@ -40,7 +47,7 @@ code_moving_robot/
 ```bash
 cd code_moving_robot
 uv pip install --python .venv/bin/python gpiozero
-.venv/bin/python route/route_run.py
+.venv/bin/python main.py
 ```
 
 `gpiozero`가 venv에 없으면 홀·모터가 안 열린다. 라이다만 쓸 때는 SDK만 있어도 된다.
@@ -49,7 +56,7 @@ uv pip install --python .venv/bin/python gpiozero
 
 1. 라이다 스캔. 안 쓸 때는 모터(DTR) 정지
 2. 직접 몰면서 occupancy grid. 포즈는 홀 예측 + 스캔 SLAM
-3. 시작·경유·도착을 그 자리에서 찍고 A*로 따라감
+3. 시작·경유·도착을 그 자리에서 찍고, 왕복으로 따라감
 4. 주행 중 장애물은 **지금 스캔** 전방 거리로 정지. 저장 지도만 믿지 않음
 5. 시연은 MQTT + 웹 (아직 없음)
 6. 중앙 센터 MQTT 상태기계는 이후
@@ -80,7 +87,7 @@ ROS 1/2, Nav2, slam_toolbox, RViz, `ydlidar_ros2_driver`.
 | 패키지 | 용도 |
 |---|---|
 | `ydlidar` | SDK에서 빌드. pip 이름 아님 |
-| `gpiozero` | 모터·홀. `route_run.py`에 필요 |
+| `gpiozero` | 모터·홀. `main.py`에 필요 |
 | `numpy` / `matplotlib` | 아직 안 씀. 지도는 PGM + ASCII |
 | `paho-mqtt` | 아직 없음 |
 
