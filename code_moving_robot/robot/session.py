@@ -33,13 +33,21 @@ from robot.recover import Recoverer, dist_to_polyline, rejoin_path, skip_blocked
 from robot.tui import Keys, c_auto, c_dim, c_err, c_info, c_ok, c_warn, prompt
 
 
-def front_blocked(points):
+def front_blocked(points, grid=None, odo=None):
+    """맵에 이미 있는 벽은 장애물이 아니다. 앞에 새로 나온 것만 회복한다."""
     if not points:
         return False
     lim = FRONT_STOP_DEG * math.pi / 180.0
     for angle, rng in points:
-        if abs(angle) < lim and 0.05 < rng < FRONT_STOP_M:
-            return True
+        if abs(angle) >= lim or rng <= 0.05 or rng >= FRONT_STOP_M:
+            continue
+        if grid is not None and odo is not None:
+            wx = odo.x + rng * math.cos(odo.yaw + angle)
+            wy = odo.y + rng * math.sin(odo.yaw + angle)
+            cell = grid.world_to_cell(wx, wy)
+            if cell is not None and grid.log_odds[cell[0]][cell[1]] > 0.5:
+                continue
+        return True
     return False
 
 
@@ -441,15 +449,15 @@ def run_drive(
                         else:
                             print(c_warn(recover.log))
                     if result == "ok":
-                        rest = []
-                        skipped = 0
-                        if follower is not None:
-                            raw = follower.remaining_points()
-                            rest = skip_blocked(raw, recover.disks)
-                            skipped = max(0, len(raw) - len(rest))
-                        path = rejoin_path(
-                            grid, odo, rest, recover.disks, scan=live_scan
+                        _, _, rest = round_trip_remaining(
+                            (odo.x, odo.y), start, waypoints, goal
                         )
+                        skipped = 0
+                        path = rejoin_path(
+                            grid, odo, rest, recover.disks, scan=None
+                        )
+                        if len(path) < 2:
+                            path = rejoin_path(grid, odo, rest, extra_disks=[], scan=None)
                         if len(path) < 2:
                             drive.stop(odo)
                             mode = "teleop"
@@ -464,7 +472,7 @@ def run_drive(
                             print(
                                 c_auto(
                                     f"경로 재연결 {len(path)}점  "
-                                    f"막힌점 {skipped}  기억 {len(recover.disks)}  "
+                                    f"기억 {len(recover.disks)}  "
                                     f"지금 ({odo.x:.2f},{odo.y:.2f})"
                                 )
                             )
@@ -496,7 +504,7 @@ def run_drive(
                         trigger = f"라이다 {scan_age:.1f}s 정지. 바닥에 걸린 듯"
                     elif last_points and (
                         scan_age is None or scan_age < LIDAR_STALL_S
-                    ) and front_blocked(last_points):
+                    ) and front_blocked(last_points, grid, odo):
                         trigger = "전방 장애물"
                     elif stuck_s >= STALL_S:
                         trigger = f"움직임 정체 {stuck_s:.1f}s"
@@ -507,11 +515,14 @@ def run_drive(
                             follower = None
                             print(c_err(f"회복 {RECOVER_MAX}회 초과. 수동 ({trigger})"))
                         else:
+                            _, _, rest = round_trip_remaining(
+                                (odo.x, odo.y), start, waypoints, goal
+                            )
                             recover.start(
                                 odo,
                                 trigger,
                                 target=follower.current(),
-                                rest=follower.remaining_points(),
+                                rest=rest or follower.remaining_points(),
                                 grid=grid,
                             )
                             print(

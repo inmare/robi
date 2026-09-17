@@ -97,10 +97,11 @@ def test_skip_blocked_keeps_last():
     assert abs(out[0][0] - 0.2) < 1e-9
 
 
-def test_plan_refuses_goal_in_disk():
+def test_plan_reaches_goal_in_disk():
     grid = OccupancyGrid(size_m=8.0, resolution=0.05)
     path = plan(grid, (0.0, 0.0), (0.6, 0.0), extra_disks=[(0.6, 0.0, 0.30)])
-    assert path == []
+    assert len(path) >= 2
+    assert path[-1][0] > 0.4
 
 
 def test_splice_does_not_reenter_hit():
@@ -158,7 +159,7 @@ if __name__ == "__main__":
     test_skip_blocked_drops_corridor()
     test_skip_blocked_keeps_last()
     test_plan_goes_around_virtual_disk()
-    test_plan_refuses_goal_in_disk()
+    test_plan_reaches_goal_in_disk()
     test_splice_skips_hit()
     test_splice_does_not_reenter_hit()
     test_rejoin_from_side_reaches_path()

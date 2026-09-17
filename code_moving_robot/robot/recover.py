@@ -240,15 +240,19 @@ def splice_path(grid, odo, rest, extra_disks):
     path = [here]
     for nxt in rest:
         nxt = (float(nxt[0]), float(nxt[1]))
-        if point_in_disks(nxt, extra_disks):
-            continue
         cur = path[-1]
-        if not seg_hits_disks(cur, nxt, extra_disks, pad=0.18):
-            path.append(nxt)
+        blocked_pt = point_in_disks(nxt, extra_disks)
+        if blocked_pt or seg_hits_disks(cur, nxt, extra_disks, pad=0.18):
+            chunk = plan(grid, cur, nxt, extra_disks=extra_disks)
+            if len(chunk) >= 2:
+                path.extend(chunk[1:])
             continue
-        chunk = plan(grid, cur, nxt, extra_disks=extra_disks)
+        path.append(nxt)
+    if len(path) < 2 and rest:
+        chunk = plan(grid, here, rest[-1], extra_disks=None)
         if len(chunk) >= 2:
-            path.extend(chunk[1:])
+            return thin_path(chunk)
+        return []
     if len(path) < 2:
         return []
     return thin_path(path)
@@ -300,32 +304,41 @@ def look_ahead_target(here, rest, min_m=0.55, max_skip=14):
 
 def rejoin_path(grid, odo, rest, extra_disks, scan=None):
     """지금 자리에서 원래 경로의 앞쪽 점으로 A* 후 나머지를 잇는다."""
-    rest = [(float(p[0]), float(p[1])) for p in (rest or [])]
+    rest_orig = [(float(p[0]), float(p[1])) for p in (rest or [])]
+    if not rest_orig:
+        return []
     disks = list(extra_disks or [])
     if scan:
         for d in scan_hits_to_disks(odo, scan, grid=grid):
             merge_disk(disks, d)
-    rest = skip_blocked(rest, disks)
+    rest = skip_blocked(rest_orig, disks)
     if not rest:
-        return []
+        rest = [rest_orig[-1]]
     here = (odo.x, odo.y)
     off = dist_to_polyline(here, rest)
     first_hit = seg_hits_disks(here, rest[0], disks, pad=0.18) or point_in_disks(
         rest[0], disks
     )
     if off < REJOIN_OFF_M and not first_hit:
-        return splice_path(grid, odo, rest, extra_disks)
-    for min_m in (0.45, 0.85, 1.30):
+        path = splice_path(grid, odo, rest, extra_disks)
+        if len(path) >= 2:
+            return path
+    for min_m in (0.45, 0.85, 1.30, 2.20):
         tgt, idx = look_ahead_target(here, rest, min_m=min_m)
         if tgt is None:
             break
-        if point_in_disks(tgt, disks, pad=0.12):
-            continue
         chunk = plan(grid, here, tgt, extra_disks=disks)
         if len(chunk) >= 2:
             tail = rest[idx + 1 :]
             return thin_path(chunk + tail)
-    return splice_path(grid, odo, rest, disks)
+    path = splice_path(grid, odo, rest, disks)
+    if len(path) >= 2:
+        return path
+    for tgt in (rest[-1], rest_orig[-1]):
+        chunk = plan(grid, here, tgt, extra_disks=None)
+        if len(chunk) >= 2:
+            return thin_path(chunk)
+    return []
 
 
 class Recoverer:
@@ -368,10 +381,6 @@ class Recoverer:
     def ingest_scan(self, odo, scan, grid=None):
         if grid is not None:
             self._grid = grid
-        if not scan:
-            return
-        for d in scan_hits_to_disks(odo, scan, grid=self._grid):
-            merge_disk(self.disks, d)
 
     def start(self, odo, reason, target=None, rest=None, grid=None):
         self.state = "reverse"
@@ -385,6 +394,8 @@ class Recoverer:
         self._grid = grid
         if target is not None and not self._rest:
             self._rest = [target]
+        if len(self.disks) > 9:
+            self.disks = self.disks[-9:]
         self.disks.extend(hit_corridor(odo.x, odo.y, odo.yaw))
         self.log = f"후진 {RECOVER_BACK_M:.2f}m ({reason})"
 

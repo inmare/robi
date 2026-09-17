@@ -71,8 +71,8 @@ def astar(grid, start_xy, goal_xy, inflate_m=INFLATE_M, free_only=False, extra_d
             _add_disk(blocked, grid, disk[0], disk[1], disk[2] + pad)
     if start in blocked:
         blocked.discard(start)
-    if goal in blocked:
-        return []
+    _clear_around(blocked, goal, grid.n, radius_cells=8)
+    blocked.discard(goal)
 
     nbrs = [(-1, 0, 1), (1, 0, 1), (0, -1, 1), (0, 1, 1),
             (-1, -1, math.sqrt(2)), (-1, 1, math.sqrt(2)),
