@@ -32,8 +32,63 @@ from robot.pins import (
     VIRTUAL_BLOCK_M,
     YAW_STALL_RAD,
     YAW_STALL_S,
+    WHEEL_SKEW_PULSES,
+    WHEEL_SKEW_RATIO,
+    WHEEL_SKEW_S,
 )
 from robot.planner import plan
+
+
+def wheel_skew_side(dl, dr, left_sign, right_sign, min_pulses=WHEEL_SKEW_PULSES, ratio=WHEEL_SKEW_RATIO):
+    """양쪽 모터가 도는데 한쪽 홀만 뛰면 그 바퀴가 걸린 것. 제자리 회전도 본다. 'left'/'right'/None."""
+    if left_sign == 0 or right_sign == 0:
+        return None
+    mx = max(dl, dr)
+    mn = min(dl, dr)
+    if mx < min_pulses:
+        return None
+    if mn > ratio * mx:
+        return None
+    return "left" if dl < dr else "right"
+
+
+class HallWatch:
+    """모터가 양쪽 다 도는데 한쪽 홀만 뛰는지 본다. 앞뒤 진동은 펄스 절대값으로 합친다."""
+
+    def __init__(self, window_s=WHEEL_SKEW_S):
+        self.window_s = window_s
+        self.t0 = None
+        self.left0 = 0
+        self.right0 = 0
+        self.left_pulses = 0
+        self.right_pulses = 0
+
+    def reset(self):
+        self.t0 = None
+        self.left_pulses = 0
+        self.right_pulses = 0
+
+    def poll(self, odo, now):
+        if self.t0 is None:
+            self.t0 = now
+            self.left0 = odo.left_count
+            self.right0 = odo.right_count
+            self.left_pulses = 0
+            self.right_pulses = 0
+            return None
+        self.left_pulses += abs(odo.left_count - self.left0)
+        self.right_pulses += abs(odo.right_count - self.right0)
+        self.left0 = odo.left_count
+        self.right0 = odo.right_count
+        if now - self.t0 < self.window_s:
+            return None
+        side = wheel_skew_side(
+            self.left_pulses, self.right_pulses, odo.left_sign, odo.right_sign
+        )
+        self.t0 = now
+        self.left_pulses = 0
+        self.right_pulses = 0
+        return side
 
 
 def sector_min_range(points, center_rad, half_rad):
@@ -99,6 +154,32 @@ def dist_to_disks(xy, disks):
     return best if best is not None else 8.0
 
 
+def grid_segment_blocked(grid, a, b, radius=0.14, step=0.05):
+    """후보 우회 궤적이 지도에 이미 있는 벽을 스치는지 본다."""
+    if grid is None:
+        return False
+    length = math.hypot(b[0] - a[0], b[1] - a[1])
+    samples = max(1, int(math.ceil(length / step)))
+    cell_r = max(1, int(math.ceil(radius / grid.resolution)))
+    for i in range(1, samples + 1):
+        t = i / samples
+        x = a[0] + t * (b[0] - a[0])
+        y = a[1] + t * (b[1] - a[1])
+        cell = grid.world_to_cell(x, y)
+        if cell is None:
+            return True
+        row, col = cell
+        for dr in range(-cell_r, cell_r + 1):
+            for dc in range(-cell_r, cell_r + 1):
+                if dr * dr + dc * dc > cell_r * cell_r:
+                    continue
+                rr, cc = row + dr, col + dc
+                if 0 <= rr < grid.n and 0 <= cc < grid.n:
+                    if grid.log_odds[rr][cc] > 0.5:
+                        return True
+    return False
+
+
 def hit_corridor(x, y, yaw, ahead_m=HIT_AHEAD_M, depth_m=HIT_DEPTH_M, radius=VIRTUAL_BLOCK_M):
     """실패한 진행 방향 앞을 여러 원으로 막아 같은 통로로 안 돌아가게 한다."""
     n = 3
@@ -116,12 +197,20 @@ def hit_corridor(x, y, yaw, ahead_m=HIT_AHEAD_M, depth_m=HIT_DEPTH_M, radius=VIR
     return out
 
 
-def choose_detour(scan, x, y, yaw, rest, clear_m=RECOVER_CLEAR_M, disks=None):
-    """빈 쪽으로 먼저 빠진다. 경로에 가까운 쪽이 막혀 있으면 넓은 쪽을 쓴다."""
+def choose_detour(
+    scan, x, y, yaw, rest, clear_m=RECOVER_CLEAR_M, disks=None, grid=None
+):
+    """안전한 후보 중 원래 진행 방향을 유지하면서 더 열린 옆길을 고른다."""
     min_go = min(0.18, clear_m)
     rest = list(rest or [])
     left = side_clearance(scan, 1)
     right = side_clearance(scan, -1)
+    route_target, _ = look_ahead_target((x, y), rest, min_m=0.65)
+    route_dist = (
+        math.hypot(route_target[0] - x, route_target[1] - y)
+        if route_target is not None
+        else 0.0
+    )
     best_side = 0
     best_score = None
     for side, cl in ((1, left), (-1, right)):
@@ -136,17 +225,25 @@ def choose_detour(scan, x, y, yaw, rest, clear_m=RECOVER_CLEAR_M, disks=None):
         d_land = dist_to_disks((hx, hy), disks)
         if d_land < 0.08:
             continue
+        if grid_segment_blocked(grid, (x, y), look):
+            continue
         if rest:
             d_path = dist_to_polyline((hx, hy), rest)
-            want = math.atan2(rest[0][1] - hy, rest[0][0] - hx)
+            target = route_target if route_target is not None else rest[0]
+            want = math.atan2(target[1] - hy, target[0] - hx)
             turn_after = abs(wrap_angle(want - tyaw))
+            progress = route_dist - math.hypot(target[0] - look[0], target[1] - look[1])
         else:
             d_path = 0.0
             turn_after = 0.0
+            progress = 0.0
+        tight_penalty = max(0.0, clear_m + 0.15 - cl)
         score = (
-            -1.20 * min(cl, 2.5)
-            + 0.20 * d_path
-            + 0.12 * turn_after
+            -0.55 * min(cl, 1.0)
+            + 0.55 * d_path
+            + 0.45 * turn_after
+            - 1.80 * progress
+            + 2.20 * tight_penalty
             - 0.70 * min(max(d_disk, -0.2), 1.6)
         )
         if best_score is None or score < best_score:
@@ -382,7 +479,7 @@ class Recoverer:
         if grid is not None:
             self._grid = grid
 
-    def start(self, odo, reason, target=None, rest=None, grid=None):
+    def start(self, odo, reason, target=None, rest=None, grid=None, stuck_wheel=None):
         self.state = "reverse"
         self.reason = reason
         self.tries += 1
@@ -394,9 +491,22 @@ class Recoverer:
         self._grid = grid
         if target is not None and not self._rest:
             self._rest = [target]
+        route_target, _ = look_ahead_target(
+            (odo.x, odo.y), self._rest, min_m=0.55
+        )
+        route_yaw = odo.yaw
+        if route_target is not None:
+            route_yaw = math.atan2(
+                route_target[1] - odo.y, route_target[0] - odo.x
+            )
         if len(self.disks) > 9:
             self.disks = self.disks[-9:]
-        self.disks.extend(hit_corridor(odo.x, odo.y, odo.yaw))
+        self.disks.extend(hit_corridor(odo.x, odo.y, route_yaw))
+        if stuck_wheel in ("left", "right"):
+            side = 1 if stuck_wheel == "left" else -1
+            nx = -side * math.sin(odo.yaw)
+            ny = side * math.cos(odo.yaw)
+            self.disks.append((odo.x + 0.20 * nx, odo.y + 0.20 * ny, 0.18))
         self.log = f"후진 {RECOVER_BACK_M:.2f}m ({reason})"
 
     def _begin_spin(self, odo, now):
@@ -420,7 +530,13 @@ class Recoverer:
     def _go_open_side(self, drive, odo, scan, now):
         rest = skip_blocked(self._rest, self.disks)
         side, left, right = choose_detour(
-            scan or [], odo.x, odo.y, odo.yaw, rest, disks=self.disks
+            scan or [],
+            odo.x,
+            odo.y,
+            odo.yaw,
+            rest,
+            disks=self.disks,
+            grid=self._grid,
         )
         if side == 0:
             drive.stop(odo)

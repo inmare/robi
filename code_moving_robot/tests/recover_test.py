@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT))
 from robot.grid import OccupancyGrid
 from robot.planner import plan
 from robot.recover import (
+    HallWatch,
     choose_detour,
     hit_corridor,
     pick_side,
@@ -17,6 +18,7 @@ from robot.recover import (
     skip_blocked,
     skip_near,
     splice_path,
+    wheel_skew_side,
 )
 
 
@@ -25,6 +27,10 @@ class FakeOdo:
         self.x = x
         self.y = y
         self.yaw = yaw
+        self.left_count = 0
+        self.right_count = 0
+        self.left_sign = 0
+        self.right_sign = 0
 
 
 def test_pick_right_when_left_blocked():
@@ -40,8 +46,8 @@ def test_pick_none_when_both_close():
     assert side == 0
 
 
-def test_choose_open_side_even_if_path_is_other_way():
-    """경로가 오른쪽이어도 왼쪽이 비어 있으면 왼쪽으로."""
+def test_choose_route_side_when_both_sides_are_safe():
+    """양쪽 모두 통과 가능하면 조금 좁아도 원래 경로 쪽을 고른다."""
     scan = [
         (math.pi / 2, 2.5),
         (math.radians(55), 2.4),
@@ -50,7 +56,7 @@ def test_choose_open_side_even_if_path_is_other_way():
     ]
     rest = [(1.0, -0.25), (2.0, -0.45)]
     side, left, right = choose_detour(scan, 0.0, 0.0, 0.0, rest)
-    assert side == 1, (side, left, right)
+    assert side == -1, (side, left, right)
 
 
 def test_choose_open_side_right():
@@ -62,6 +68,25 @@ def test_choose_open_side_right():
     ]
     rest = [(1.0, 0.25), (2.0, 0.45)]
     side, left, right = choose_detour(scan, 0.0, 0.0, 0.0, rest)
+    assert side == 1, (side, left, right)
+
+
+def test_choose_other_side_when_route_side_is_blocked():
+    scan = [(math.pi / 2, 2.0), (-math.pi / 2, 0.15)]
+    rest = [(1.0, -0.25), (2.0, -0.45)]
+    side, left, right = choose_detour(scan, 0.0, 0.0, 0.0, rest)
+    assert side == 1, (side, left, right)
+
+
+def test_choose_avoids_obstacle_already_in_grid():
+    grid = OccupancyGrid(size_m=8.0, resolution=0.05)
+    cell = grid.world_to_cell(0.25, 0.35)
+    grid.log_odds[cell[0]][cell[1]] = 2.0
+    scan = [(math.pi / 2, 2.0), (-math.pi / 2, 2.0)]
+    rest = [(1.0, 0.45), (2.0, 0.55)]
+    side, left, right = choose_detour(
+        scan, 0.0, 0.0, 0.0, rest, grid=grid
+    )
     assert side == -1, (side, left, right)
 
 
@@ -150,11 +175,36 @@ def test_rejoin_goes_around_new_disk():
         assert math.hypot(p[0] - 0.45, p[1] - 0.0) > 0.16, p
 
 
+def test_wheel_skew_left_stuck():
+    assert wheel_skew_side(0, 6, 1, 1) == "left"
+    assert wheel_skew_side(6, 0, 1, 1) == "right"
+    assert wheel_skew_side(5, 5, 1, 1) is None
+    assert wheel_skew_side(0, 6, -1, 1) == "left"
+    assert wheel_skew_side(0, 2, 1, 1) is None
+    assert wheel_skew_side(0, 6, 1, 0) is None
+
+
+def test_hall_watch_oscillating_free_wheel():
+    odo = FakeOdo(0.0, 0.0)
+    odo.left_sign = 1
+    odo.right_sign = 1
+    watch = HallWatch(window_s=0.80)
+    assert watch.poll(odo, 0.00) is None
+    odo.right_count = 4
+    assert watch.poll(odo, 0.30) is None
+    odo.right_count = 1
+    odo.left_sign = -1
+    odo.right_sign = 1
+    assert watch.poll(odo, 0.81) == "left"
+
+
 if __name__ == "__main__":
     test_pick_right_when_left_blocked()
     test_pick_none_when_both_close()
-    test_choose_open_side_even_if_path_is_other_way()
+    test_choose_route_side_when_both_sides_are_safe()
     test_choose_open_side_right()
+    test_choose_other_side_when_route_side_is_blocked()
+    test_choose_avoids_obstacle_already_in_grid()
     test_skip_near_hit()
     test_skip_blocked_drops_corridor()
     test_skip_blocked_keeps_last()
@@ -164,4 +214,6 @@ if __name__ == "__main__":
     test_splice_does_not_reenter_hit()
     test_rejoin_from_side_reaches_path()
     test_rejoin_goes_around_new_disk()
+    test_wheel_skew_left_stuck()
+    test_hall_watch_oscillating_free_wheel()
     print("recover_test ok")

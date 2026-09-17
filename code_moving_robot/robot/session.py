@@ -29,7 +29,7 @@ from robot.pins import (
     TELEOP_SPEED,
     TRACK_M,
 )
-from robot.recover import Recoverer, dist_to_polyline, rejoin_path, skip_blocked
+from robot.recover import HallWatch, Recoverer, dist_to_polyline, rejoin_path, skip_blocked
 from robot.tui import Keys, c_auto, c_dim, c_err, c_info, c_ok, c_warn, prompt
 
 
@@ -377,6 +377,7 @@ def run_drive(
         last_follow_i = -1
         last_scan_t = None
         recover = Recoverer()
+        hall_watch = HallWatch()
         dirty = False
 
         drive.enable()
@@ -490,9 +491,12 @@ def run_drive(
                 else:
                     left = follower.remaining_m(odo)
                     heading = abs(follower.heading_err(odo))
+                    skew = hall_watch.poll(odo, now)
                     if last_progress_m is None:
                         last_progress_m = left
                         last_move_t = now
+                    elif skew is not None:
+                        pass
                     elif heading > 0.40:
                         last_move_t = now
                     elif last_progress_m - left >= STALL_MOVE_M:
@@ -500,7 +504,12 @@ def run_drive(
                         last_move_t = now
                     stuck_s = now - last_move_t
                     trigger = None
-                    if scan_age is not None and scan_age >= LIDAR_STALL_S:
+                    stuck_wheel = None
+                    if skew is not None:
+                        stuck_wheel = skew
+                        name = "왼쪽" if skew == "left" else "오른쪽"
+                        trigger = f"{name} 바퀴 걸림"
+                    elif scan_age is not None and scan_age >= LIDAR_STALL_S:
                         trigger = f"라이다 {scan_age:.1f}s 정지. 바닥에 걸린 듯"
                     elif last_points and (
                         scan_age is None or scan_age < LIDAR_STALL_S
@@ -524,7 +533,9 @@ def run_drive(
                                 target=follower.current(),
                                 rest=rest or follower.remaining_points(),
                                 grid=grid,
+                                stuck_wheel=stuck_wheel,
                             )
+                            hall_watch.reset()
                             print(
                                 c_warn(
                                     f"회복 {recover.tries}/{RECOVER_MAX}: {recover.log}"
@@ -766,6 +777,7 @@ def run_drive(
                 mode = "auto"
                 recover.abort()
                 recover.tries = 0
+                hall_watch.reset()
                 last_follow_i = -1
                 last_progress_m = None
                 last_move_t = time.monotonic()
