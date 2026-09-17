@@ -43,7 +43,12 @@ class Follower:
     def _advance(self, odo):
         while self.i < len(self.points) - 1:
             px, py = self.points[self.i]
-            if math.hypot(px - odo.x, py - odo.y) < ARRIVE_M:
+            dist = math.hypot(px - odo.x, py - odo.y)
+            if dist < ARRIVE_M:
+                self.i += 1
+                continue
+            ahead = (px - odo.x) * math.cos(odo.yaw) + (py - odo.y) * math.sin(odo.yaw)
+            if ahead < 0.0 and dist < 0.55:
                 self.i += 1
                 continue
             nx, ny = self.points[self.i + 1]
@@ -54,7 +59,7 @@ class Follower:
                 continue
             t = ((odo.x - px) * vx + (odo.y - py) * vy) / l2
             cross = abs((odo.x - px) * vy - (odo.y - py) * vx) / math.sqrt(l2)
-            if t > 0.92 and cross < 0.40:
+            if t > 0.55 and cross < 0.55:
                 self.i += 1
                 continue
             break
@@ -89,6 +94,12 @@ class Follower:
             return True
         want = math.atan2(dy, dx)
         err = wrap_angle(want - odo.yaw)
+        if dist < 0.35 and abs(err) > 2.0:
+            if self.i < len(self.points) - 1:
+                self.i += 1
+            else:
+                self.i = len(self.points)
+            return False
         cur = self.points[self.i]
         cross = math.hypot(cur[0] - odo.x, cur[1] - odo.y)
         spin_lim = 0.85 if cross > 0.22 else 0.50

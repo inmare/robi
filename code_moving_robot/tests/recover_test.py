@@ -89,6 +89,14 @@ def test_skip_blocked_drops_corridor():
     assert abs(out[0][0] - 1.6) < 1e-9, out
 
 
+def test_skip_blocked_keeps_last():
+    disks = [(0.0, 0.0, 2.0)]
+    pts = [(0.1, 0.0), (0.2, 0.0)]
+    out = skip_blocked(pts, disks)
+    assert len(out) == 1
+    assert abs(out[0][0] - 0.2) < 1e-9
+
+
 def test_plan_refuses_goal_in_disk():
     grid = OccupancyGrid(size_m=8.0, resolution=0.05)
     path = plan(grid, (0.0, 0.0), (0.6, 0.0), extra_disks=[(0.6, 0.0, 0.30)])
@@ -148,6 +156,7 @@ if __name__ == "__main__":
     test_choose_open_side_right()
     test_skip_near_hit()
     test_skip_blocked_drops_corridor()
+    test_skip_blocked_keeps_last()
     test_plan_goes_around_virtual_disk()
     test_plan_refuses_goal_in_disk()
     test_splice_skips_hit()

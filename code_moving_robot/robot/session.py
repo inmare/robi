@@ -29,7 +29,7 @@ from robot.pins import (
     TELEOP_SPEED,
     TRACK_M,
 )
-from robot.recover import Recoverer, rejoin_path, skip_blocked
+from robot.recover import Recoverer, dist_to_polyline, rejoin_path, skip_blocked
 from robot.tui import Keys, c_auto, c_dim, c_err, c_info, c_ok, c_warn, prompt
 
 
@@ -282,10 +282,10 @@ def start_round_trip(grid, odo, slam, lidar, start, waypoints, goal, recover, la
     if not rest:
         print(c_warn("이미 시작점에 있습니다. 왕복할 나머지가 없습니다"))
         return None
-    off = math.hypot(rest[0][0] - odo.x, rest[0][1] - odo.y)
+    off = dist_to_polyline((odo.x, odo.y), rest)
     if off >= REJOIN_OFF_M:
         print(c_info(f"경로에서 {off:.2f}m 옆. A*로 선에 붙입니다"))
-    path = rejoin_path(grid, odo, rest, recover.disks, scan=scan)
+    path = rejoin_path(grid, odo, rest, recover.disks, scan=None)
     if len(path) < 2:
         print(c_err("따라갈 점이 없습니다"))
         return None
@@ -481,8 +481,11 @@ def run_drive(
                     print(c_ok("왕복 끝. 시작점"))
                 else:
                     left = follower.remaining_m(odo)
+                    heading = abs(follower.heading_err(odo))
                     if last_progress_m is None:
                         last_progress_m = left
+                        last_move_t = now
+                    elif heading > 0.40:
                         last_move_t = now
                     elif last_progress_m - left >= STALL_MOVE_M:
                         last_progress_m = left

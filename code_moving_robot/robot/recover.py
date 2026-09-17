@@ -204,7 +204,7 @@ def skip_blocked(points, disks, pad=0.10):
     kept = [p for p in points if not point_in_disks(p, disks, pad=pad)]
     if kept:
         return kept
-    return []
+    return [points[-1]]
 
 
 def thin_path(points, step_m=0.18):
