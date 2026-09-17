@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Robi 모니터</title>
+  <style>
+    :root {
+      --bg: #12141a;
+      --panel: #1b1e27;
+      --line: #2c3140;
+      --text: #eceae3;
+      --mute: #8d927c;
+      --out: #7ec8dc;
+      --in: #b7d59a;
+      --fail: #ee8b7c;
+      --mqtt: #c9b3ee;
+      --topic: #d7bc8a;
+      --sys: #8d927c;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+      font: 15px/1.45 "Segoe UI", "Malgun Gothic", sans-serif; }
+    header { display: flex; justify-content: space-between; align-items: baseline;
+      padding: 16px 20px 12px; border-bottom: 1px solid var(--line); }
+    header h1 { margin: 0; font-size: 18px; font-weight: 650; letter-spacing: .02em; }
+    header p { margin: 0; color: var(--mute); font-size: 13px; }
+    .layout { display: grid; grid-template-columns: 280px 1fr; gap: 16px; padding: 16px 20px 20px; height: calc(100% - 58px); }
+    .log-wrap { display: flex; flex-direction: column; min-height: 0; }
+    @media (max-width: 860px) {
+      .layout { grid-template-columns: 1fr; height: auto; }
+      .log-wrap { order: -1; min-height: 280px; }
+    }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+    h2 { margin: 0 0 10px; font-size: 12px; font-weight: 650; color: var(--mute); text-transform: uppercase; letter-spacing: .08em; }
+    .badges { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+    .badge { font-size: 12px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--mute); }
+    .badge.on { color: var(--in); border-color: #3d5a3a; }
+    .badge.off { color: var(--fail); }
+    .kv { display: grid; grid-template-columns: 88px 1fr; gap: 6px 8px; font-size: 13px; margin-bottom: 14px; }
+    .kv span { color: var(--mute); }
+    .mm { font-size: 28px; font-variant-numeric: tabular-nums; letter-spacing: .04em; }
+    .sw { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 14px; }
+    .sw i { font-style: normal; font-size: 12px; padding: 2px 7px; border-radius: 6px; border: 1px solid var(--line); color: var(--mute); }
+    .sw i.hit { color: var(--in); border-color: #3d5a3a; }
+    .btns { display: flex; flex-wrap: wrap; gap: 6px; }
+    button { background: #252a36; color: var(--text); border: 1px solid var(--line); border-radius: 7px;
+      padding: 7px 10px; font: inherit; cursor: pointer; }
+    button:hover { border-color: #5a6278; }
+    button.halt { color: var(--fail); }
+    .log-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .log { flex: 1; overflow: auto; font: 12.5px/1.5 ui-monospace, Consolas, monospace;
+      background: #10131a; border-radius: 8px; padding: 10px; min-height: 280px; }
+    .row { display: grid; grid-template-columns: 76px 44px 150px 1fr; gap: 8px; padding: 2px 0; }
+    .row .t { color: var(--mute); }
+    .row .via.mqtt { color: var(--mqtt); }
+    .row .via.hub { color: var(--mute); }
+    .row .topic { color: var(--topic); }
+    .row.out .body { color: var(--out); }
+    .row.in .body { color: var(--in); }
+    .row.fail .body { color: var(--fail); }
+    .row.sys .body { color: var(--sys); }
+    .legend { color: var(--mute); font-size: 12px; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Robi 모니터</h1>
+    <p>상자 명령과 MQTT 토픽을 같이 봅니다</p>
+  </header>
+  <div class="layout">
+    <aside class="panel">
+      <h2>연결</h2>
+      <div class="badges">
+        <span id="boxBadge" class="badge off">상자</span>
+        <span id="mqttBadge" class="badge off">MQTT</span>
+        <span id="wsBadge" class="badge off">브라우저</span>
+      </div>
+      <h2>상태</h2>
+      <div class="mm" id="mm">— mm</div>
+      <div class="kv">
+        <span>동작</span><div id="state">—</div>
+        <span>센서</span><div id="sensor">—</div>
+      </div>
+      <div class="sw">
+        <i id="lb">하단</i><i id="lt">상단</i><i id="pb">후진</i><i id="pf">전진</i>
+      </div>
+      <h2>원자 명령</h2>
+      <div class="btns" id="cmds"></div>
+      <h2 style="margin-top:14px">레시피</h2>
+      <div class="btns" id="recipes"></div>
+      <p class="legend">MQTT가 꺼져 있어도 토픽 이름은 같습니다. 브로커를 켜면 보라색 MQTT 줄이 추가로 생깁니다.</p>
+    </aside>
+    <section class="panel log-wrap">
+      <div class="log-head">
+        <h2>로그</h2>
+        <div class="btns">
+          <button id="clear" type="button">지우기</button>
+        </div>
+      </div>
+      <div class="log" id="log"></div>
+    </section>
+  </div>
+  <script>
+    const logEl = document.getElementById("log");
+    const LABELS = {
+      "lift.up": "상승",
+      "lift.down": "하강",
+      "pusher.forward": "전진",
+      "pusher.back": "후진",
+      "halt": "정지",
+      "status": "상태"
+    };
+
+    function fmtTime(ts) {
+      const d = new Date((ts || 0) * 1000);
+      return [d.getHours(), d.getMinutes(), d.getSeconds()]
+        .map(n => String(n).padStart(2, "0")).join(":");
+    }
+
+    function setBadge(id, on, label) {
+      const el = document.getElementById(id);
+      el.className = "badge " + (on ? "on" : "off");
+      el.textContent = label;
+    }
+
+    function setHit(id, v) {
+      document.getElementById(id).className = Number(v) === 1 ? "hit" : "";
+    }
+
+    function applyStatus(s) {
+      if (!s) return;
+      document.getElementById("state").textContent = s.state || "—";
+      document.getElementById("mm").textContent =
+        s.mm === null || s.mm === undefined ? "— mm" : s.mm + " mm";
+      document.getElementById("sensor").textContent =
+        s.sensor_ok === 1 ? "정상" : s.sensor_ok === 0 ? "없음" : "—";
+      setHit("lb", s.lift_bottom);
+      setHit("lt", s.lift_top);
+      setHit("pb", s.pusher_back);
+      setHit("pf", s.pusher_front);
+    }
+
+    function applyMeta(msg) {
+      const box = (msg.box || []).join(", ") || "없음";
+      setBadge("boxBadge", (msg.box || []).length > 0, "상자 " + box);
+      const mqttLabel = msg.mqtt ? ("MQTT " + (msg.mqtt_host || "연결")) : "MQTT 꺼짐";
+      setBadge("mqttBadge", !!msg.mqtt, mqttLabel);
+    }
+
+    function addRow(msg) {
+      if (msg.type !== "msg") return;
+      const row = document.createElement("div");
+      const fail = msg.kind === "F" || /FAIL/.test(msg.line || "");
+      row.className = "row " + (fail ? "fail" : (msg.dir || "sys"));
+      const body = msg.line || "";
+      row.innerHTML =
+        '<span class="t">' + fmtTime(msg.ts) + "</span>" +
+        '<span class="via ' + (msg.via || "") + '">' + (msg.via || "") + "</span>" +
+        '<span class="topic">' + (msg.topic || "") + "</span>" +
+        '<span class="body">' + body.replace(/[<>&]/g, c => ({ "<":"&lt;","&":"&amp;",">":"&gt;" }[c])) + "</span>";
+      logEl.appendChild(row);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    async function sendCmd(cmd) {
+      await fetch("/api/cmd", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cmd })
+      });
+    }
+    async function sendRecipe(name) {
+      await fetch("/api/cmd", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recipe: name })
+      });
+    }
+
+    async function setupButtons() {
+      const meta = await fetch("/api/meta").then(r => r.json());
+      const cmds = document.getElementById("cmds");
+      meta.primitives.forEach(p => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = LABELS[p.cmd] || p.cmd;
+        b.title = p.help;
+        if (p.cmd === "halt") b.className = "halt";
+        b.onclick = () => sendCmd(p.cmd);
+        cmds.appendChild(b);
+      });
+      const rec = document.getElementById("recipes");
+      meta.recipes.forEach(r => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = r.name;
+        b.title = r.help;
+        b.onclick = () => sendRecipe(r.name);
+        rec.appendChild(b);
+      });
+    }
+
+    function connect() {
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      const ws = new WebSocket(proto + "://" + location.host + "/ws");
+      ws.onopen = () => setBadge("wsBadge", true, "브라우저 연결");
+      ws.onclose = () => {
+        setBadge("wsBadge", false, "브라우저 끊김");
+        setTimeout(connect, 1000);
+      };
+      ws.onmessage = ev => {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === "snapshot") {
+          applyStatus(msg.status);
+          applyMeta(msg);
+          logEl.innerHTML = "";
+          (msg.history || []).forEach(addRow);
+        } else if (msg.type === "status") {
+          applyStatus(msg.status);
+        } else if (msg.type === "meta") {
+          applyMeta(msg);
+        } else if (msg.type === "msg") {
+          addRow(msg);
+        }
+      };
+    }
+
+    document.getElementById("clear").onclick = () => { logEl.innerHTML = ""; };
+    setupButtons();
+    connect();
+  </script>
+</body>
+</html>
