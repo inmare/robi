@@ -49,3 +49,8 @@ uint16_t sensorReadDistanceMm() {
 bool sensorTimeoutOccurred() {
     return sensor.timeoutOccurred();
 }
+
+bool sensorRangeReady() {
+    // VL53L0X RESULT_INTERRUPT_STATUS. 값이 없으면 read()가 수십 ms를 기다림.
+    return (sensor.readReg(0x13) & 0x07) != 0;
+}
