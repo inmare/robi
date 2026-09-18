@@ -32,7 +32,8 @@ def main_menu_lines(slots):
             lines.append(c_ok(f"{s.index})  {s.name}"))
             lines.append(c_dim(f"      {s.saved_at or ''}"))
     lines.append("")
-    lines.append(c_info("n)  빈 슬롯에 새 경로"))
+    lines.append(c_info("n)  새 경로 만들기"))
+    lines.append(c_warn("o)  슬롯 덮어쓰기"))
     lines.append("q)  종료")
     return lines
 
@@ -42,29 +43,53 @@ def show_main_menu():
     clear_screen()
     print(draw_box("ROBI 이동 로봇", main_menu_lines(slots)))
     print()
-    print(c_dim("번호 = 재생 · 빈 슬롯/n = 새 기록 (기존 슬롯 덮어쓰기 없음)"))
+    print(c_dim("번호 = 슬롯 선택 · 빈 슬롯은 새 기록 · n 새 경로 · o 덮어쓰기"))
     return prompt(c_warn("선택: ")).strip().lower()
 
 
-def choose_empty_slot():
+def slot_submenu(info):
+    clear_screen()
+    lines = [
+        c_ok(info.name),
+        c_dim(info.saved_at or ""),
+        "",
+        "1)  재생  — 경로를 갔다가 같은 길로 시작점",
+        "2)  덮어쓰기 — 이 슬롯에 새로 기록",
+        "b)  뒤로",
+    ]
+    print(draw_box(f"슬롯 {info.index}", lines))
+    raw = prompt(c_warn("선택 [1 재생]: ")).strip().lower()
+    if raw in ("2", "o", "overwrite", "덮어쓰기"):
+        return "overwrite"
+    if raw in ("b", "q", "n"):
+        return "back"
+    return "play"
+
+
+def choose_save_slot():
     slots = STORE.list()
-    empty = [s for s in slots if s.empty]
-    if not empty:
-        print(c_err("빈 슬롯이 없습니다. 기존 경로는 재생만 됩니다"))
-        return None
     print()
-    print(c_info("빈 슬롯"))
-    for s in empty:
-        print(f"  {s.index})  {c_dim('[비어 있음]')}")
+    print(c_info("저장할 슬롯"))
+    for s in slots:
+        mark = c_dim("[비어 있음]") if s.empty else c_ok(s.label())
+        print(f"  {s.index})  {mark}")
     raw = prompt(c_warn("번호 (Enter 취소): ")).strip()
     if not raw.isdigit():
         return None
     index = int(raw)
-    info = STORE.info(index) if 1 <= index <= STORE.n else None
-    if info is None or not info.empty:
-        print(c_err("빈 슬롯만 고를 수 있습니다"))
+    if index < 1 or index > STORE.n:
+        print(c_err("없는 슬롯입니다"))
         return None
     return index
+
+
+def confirm_overwrite(info):
+    raw = prompt(
+        c_warn(
+            f"슬롯 {info.index} 「{info.name}」 ({info.saved_at}) 을 덮어쓸까요? [y/N] "
+        )
+    ).strip().lower()
+    return raw in ("y", "yes", "ㅛ")
 
 
 def ask_name(default=""):
@@ -83,11 +108,15 @@ def after_drive(result):
     name = result.get("name") or DEFAULT_NAME
     dirty = result.get("dirty") or result.get("map_writable")
     if slot_index is None:
-        slot_index = choose_empty_slot()
+        slot_index = choose_save_slot()
         if slot_index is None:
             print(c_warn("저장 취소"))
             return
-        name = ask_name(name)
+        info = STORE.info(slot_index)
+        if not info.empty and not confirm_overwrite(info):
+            print(c_warn("저장 취소"))
+            return
+        name = ask_name(info.name if not info.empty else name)
     elif not dirty:
         return
     save_now(
@@ -103,15 +132,15 @@ def after_drive(result):
     )
 
 
-def drive_new(slot_index=None, slot_name=DEFAULT_NAME):
+def drive_new(slot_index=None, slot_name=DEFAULT_NAME, data=None, grid=None):
     result = run_drive(
         store=STORE,
         slot_index=slot_index,
         slot_name=slot_name,
         recording=True,
         map_writable=True,
-        grid=None,
-        data=None,
+        grid=grid,
+        data=data,
         center_host=CENTER_HOST,
         center_port=CENTER_PORT,
     )
@@ -141,6 +170,19 @@ def drive_play(info):
     prompt(c_dim("Enter 로 메뉴..."))
 
 
+def start_overwrite(info):
+    if not info.empty and not confirm_overwrite(info):
+        return
+    name = ask_name(info.name if not info.empty else DEFAULT_NAME)
+    data, grid = None, None
+    if not info.empty:
+        loaded = STORE.load(info.index)
+        if loaded is not None:
+            data, grid, _info = loaded
+    print(c_ok(f"슬롯 {info.index}을 「{name}」 이름으로 덮어씁니다"))
+    drive_new(slot_index=info.index, slot_name=name, data=data, grid=grid)
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Robi 이동로봇")
     parser.add_argument(
@@ -166,13 +208,22 @@ def main():
         if raw in ("q",):
             break
         if raw in ("n",):
-            index = choose_empty_slot()
+            index = choose_save_slot()
             if index is None:
-                prompt(c_dim("Enter..."))
                 continue
-            name = ask_name(DEFAULT_NAME)
-            print(c_ok(f"새 경로는 슬롯 {index} 「{name}」에 저장합니다"))
-            drive_new(slot_index=index, slot_name=name)
+            info = STORE.info(index)
+            if not info.empty:
+                start_overwrite(info)
+            else:
+                name = ask_name(DEFAULT_NAME)
+                print(c_ok(f"새 경로는 슬롯 {index} 「{name}」에 저장합니다"))
+                drive_new(slot_index=index, slot_name=name)
+            continue
+        if raw in ("o",):
+            index = choose_save_slot()
+            if index is None:
+                continue
+            start_overwrite(STORE.info(index))
             continue
         if raw.isdigit():
             index = int(raw)
@@ -186,9 +237,15 @@ def main():
                 print(c_ok(f"새 경로는 슬롯 {index} 「{name}」에 저장합니다"))
                 drive_new(slot_index=index, slot_name=name)
                 continue
+            action = slot_submenu(info)
+            if action == "back":
+                continue
+            if action == "overwrite":
+                start_overwrite(info)
+                continue
             drive_play(info)
             continue
-        print(c_warn("1~4, n, q 중에서 고르세요"))
+        print(c_warn("1~4, n, o, q 중에서 고르세요"))
         prompt(c_dim("Enter..."))
 
 
