@@ -181,15 +181,18 @@ def snap_to_route(grid, odo, slam, scan, start, waypoints, goal, prefer_here=Tru
     return best_name, best
 
 
-def restore_heading(grid, odo, lidar, data):
-    print(c_dim("라이다 켜는 중. 1초 대기..."))
+def restore_heading(grid, odo, lidar, data, quiet=False):
+    if not quiet:
+        print(c_dim("라이다 켜는 중. 위치 확인..."))
     time.sleep(1.0)
     points = collect_scan(lidar, n=6, timeout_s=12.0)
     if not points:
-        print(c_warn("방향 맞춤용 스캔이 없습니다"))
+        if not quiet:
+            print(c_warn("방향 맞춤용 스캔이 없습니다"))
         return False
     if grid.occ_n < MIN_OCC:
-        print(c_err(f"저장 지도가 거의 비었습니다 (칸 {grid.occ_n}). 다시 그려야 합니다"))
+        if not quiet:
+            print(c_err(f"저장 지도가 거의 비었습니다 (칸 {grid.occ_n}). 다시 그려야 합니다"))
         return False
     start = data.get("start") or [0.0, 0.0, 0.0]
     waypoints = list(data.get("waypoints") or [])
@@ -211,17 +214,19 @@ def restore_heading(grid, odo, lidar, data):
     if head is not None:
         picks.append(("시작점", head))
     if not picks:
-        print(c_err("이전 지도와 지금 스캔이 안 맞습니다"))
+        if not quiet:
+            print(c_err("이전 지도와 지금 스캔이 안 맞습니다"))
         return False
     best_name, best = max(picks, key=lambda item: item[1].score)
     odo.set_pose(best.x, best.y, best.yaw)
     extra = " (여러 각이 비슷. 틀리면 l)" if best.ambiguous else ""
-    print(
-        c_ok(
-            f"방향 맞춤 {best_name} x={best.x:.2f} y={best.y:.2f} "
-            f"yaw={math.degrees(best.yaw):.0f}° score={best.score:.2f}{extra}"
+    if not quiet:
+        print(
+            c_ok(
+                f"방향 맞춤 {best_name} x={best.x:.2f} y={best.y:.2f} "
+                f"yaw={math.degrees(best.yaw):.0f}° score={best.score:.2f}{extra}"
+            )
         )
-    )
     return True
 
 
@@ -420,7 +425,7 @@ def run_drive(
         motion = None
         mode = "teleop"
         follower = None
-        last_status = 0.0
+        last_status = time.monotonic()
         last_points = None
         slam = None
         last_record_t = time.monotonic()
@@ -438,24 +443,22 @@ def run_drive(
             start = data.get("start") or [0.0, 0.0, 0.0]
             waypoints = list(data.get("waypoints") or [])
             goal = data.get("goal")
-            ok = restore_heading(grid, odo, lidar, data)
+            ok = restore_heading(grid, odo, lidar, data, quiet=recording)
             if not ok:
                 odo.set_pose(
                     float(start[0]),
                     float(start[1]),
                     float(start[2]) if len(start) > 2 else 0.0,
                 )
-                print(
-                    c_warn(
-                        "방향 맞춤 실패. 저장한 시작 좌표를 씁니다. "
-                        "앞이 반대면 l. 지도는 버리지 않습니다"
-                    )
-                )
+                if recording:
+                    print(c_warn("기존 지도 위치를 못 맞춰 저장된 시작점에서 기록합니다"))
+                else:
+                    print(c_warn("위치 맞춤 실패. 저장된 시작점 사용; 방향이 틀리면 l"))
             if recording:
                 waypoints = []
                 goal = None
                 map_writable = True
-                print(c_info("기록 모드. 이전 경로는 비웠습니다. 지도는 유지. 도착에서 k"))
+                print(c_info(f"기록 시작 → 슬롯 {slot_index} 「{name}」 · 도착에서 k"))
             else:
                 map_writable = False
                 print(c_ok("재생 모드. g 목적지, b 원래 자리, r 왕복"))
@@ -475,12 +478,7 @@ def run_drive(
 
             center = CenterClient(str(center_host), int(center_port or 9000))
             center.start()
-            print(
-                c_info(
-                    f"중앙 {center_host}:{center_port} 연결 시도. "
-                    "여기 키와 센터 명령을 같이 씁니다. 키 쪽이 우선"
-                )
-            )
+            print(c_dim(f"중앙 연결 시도 {center_host}:{center_port}"))
 
         def current_phase():
             return {"go": "go", "back": "back", "round": "round"}.get(auto_leg, "idle")
@@ -798,7 +796,8 @@ def run_drive(
             ch = keys.read(0.0 if mode == "auto" else 0.02)
             if ch is None:
                 now = time.monotonic()
-                if now - last_status >= 2.0:
+                status_interval = 2.0 if mode == "auto" else 10.0
+                if now - last_status >= status_interval:
                     last_status = now
                     if mode == "auto" and recover.active():
                         print(
@@ -887,7 +886,8 @@ def run_drive(
                     dirty = True
                     print(
                         c_ok(
-                            f"경로 기록 끝. 도착 {goal} 점 {len(waypoints)}개. r 로 왕복"
+                            f"기록 끝: 점 {len(waypoints)}개 · "
+                            f"q로 나가면 슬롯 {slot_index} 「{name}」에 저장 · r 왕복"
                         )
                     )
                 else:
@@ -985,13 +985,13 @@ def run_drive(
         print(c_warn("Ctrl+C"))
     finally:
         for closer in (
+            keys.close,
             lambda: center.close() if center is not None else None,
             lambda: drive.stop(odo) if drive is not None else None,
             lambda: drive.disable() if drive is not None else None,
             lambda: lidar.close() if lidar is not None else None,
             lambda: odo.close() if odo is not None else None,
             lambda: drive.close() if drive is not None else None,
-            keys.close,
         ):
             try:
                 closer()

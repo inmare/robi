@@ -150,7 +150,7 @@ def drive_new(slot_index=None, slot_name=DEFAULT_NAME, data=None, grid=None):
         center_host=CENTER_HOST,
         center_port=CENTER_PORT,
     )
-    after_drive(result, force_overwrite=slot_index is not None)
+    after_drive(result)
     prompt(c_dim("Enter 로 메뉴..."))
 
 
@@ -201,7 +201,15 @@ def main():
         if raw in ("q",):
             break
         if raw in ("n",):
-            drive_new()
+            index = choose_save_slot()
+            if index is None:
+                continue
+            info = STORE.info(index)
+            if not info.empty and not confirm_overwrite(info):
+                continue
+            name = ask_name(info.name if not info.empty else DEFAULT_NAME)
+            print(c_ok(f"새 경로는 슬롯 {index} 「{name}」에 저장합니다"))
+            drive_new(slot_index=index, slot_name=name)
             continue
         if raw in ("o",):
             index = choose_save_slot()
@@ -210,13 +218,15 @@ def main():
             info = STORE.info(index)
             if not info.empty and not confirm_overwrite(info):
                 continue
+            name = ask_name(info.name if not info.empty else DEFAULT_NAME)
             data, grid = None, None
             loaded = None if info.empty else STORE.load(index)
             if loaded is not None:
                 data, grid, _info = loaded
+            print(c_ok(f"슬롯 {index}을 「{name}」 이름으로 덮어씁니다"))
             drive_new(
                 slot_index=index,
-                slot_name=info.name if not info.empty else DEFAULT_NAME,
+                slot_name=name,
                 data=data,
                 grid=grid,
             )
@@ -229,7 +239,9 @@ def main():
                 continue
             info = STORE.info(index)
             if info.empty:
-                drive_new(slot_index=index)
+                name = ask_name(DEFAULT_NAME)
+                print(c_ok(f"새 경로는 슬롯 {index} 「{name}」에 저장합니다"))
+                drive_new(slot_index=index, slot_name=name)
                 continue
             action = slot_submenu(info)
             if action == "back":
@@ -237,13 +249,15 @@ def main():
             if action == "overwrite":
                 if not confirm_overwrite(info):
                     continue
+                name = ask_name(info.name)
                 data, grid = None, None
                 loaded = STORE.load(info.index)
                 if loaded is not None:
                     data, grid, _info = loaded
+                print(c_ok(f"슬롯 {info.index}을 「{name}」 이름으로 덮어씁니다"))
                 drive_new(
                     slot_index=info.index,
-                    slot_name=info.name,
+                    slot_name=name,
                     data=data,
                     grid=grid,
                 )

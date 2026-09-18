@@ -1,5 +1,6 @@
 """슬롯 메뉴 TUI와 주행 중 키 입력. 추가 패키지 없이 ANSI + termios."""
 
+import atexit
 import select
 import sys
 
@@ -107,7 +108,9 @@ class Keys:
             raise RuntimeError("이 주행 키 입력은 Linux(파이)에서만 됩니다")
         self.fd = sys.stdin.fileno()
         self.old = termios.tcgetattr(self.fd)
+        self.closed = False
         tty.setcbreak(self.fd)
+        atexit.register(self.close)
 
     def read(self, timeout):
         ready, _, _ = select.select([sys.stdin], [], [], timeout)
@@ -137,4 +140,10 @@ class Keys:
         return ch
 
     def close(self):
-        termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old)
+        if self.closed:
+            return
+        self.closed = True
+        try:
+            termios.tcsetattr(self.fd, termios.TCSANOW, self.old)
+        except (OSError, termios.error):
+            pass
