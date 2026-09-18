@@ -984,20 +984,19 @@ def run_drive(
     except KeyboardInterrupt:
         print(c_warn("Ctrl+C"))
     finally:
-        if center is not None:
-            center.close()
-        if drive is not None:
+        for closer in (
+            lambda: center.close() if center is not None else None,
+            lambda: drive.stop(odo) if drive is not None else None,
+            lambda: drive.disable() if drive is not None else None,
+            lambda: lidar.close() if lidar is not None else None,
+            lambda: odo.close() if odo is not None else None,
+            lambda: drive.close() if drive is not None else None,
+            keys.close,
+        ):
             try:
-                drive.stop(odo)
+                closer()
             except Exception:
-                drive.disable()
-        if lidar is not None:
-            lidar.close()
-        if odo is not None:
-            odo.close()
-        if drive is not None:
-            drive.close()
-        keys.close()
+                pass
         print(c_dim("라이다·모터 OFF"))
 
     return {

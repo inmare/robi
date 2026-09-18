@@ -12,6 +12,9 @@ RIGHT_RPWM, RIGHT_LPWM, RIGHT_REN, RIGHT_LEN = 12, 13, 17, 4
 
 LEFT_INVERT = False
 RIGHT_INVERT = False
+# w 전진만. 후진(s)은 1.00 유지. 왼쪽으로 휘면 오른쪽을 줄임. 0.02 단위.
+LEFT_FWD_SCALE = 1.00
+RIGHT_FWD_SCALE = 0.88
 PWM_HZ = 1000
 
 MAGNETS = 4
