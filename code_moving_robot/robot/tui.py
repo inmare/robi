@@ -95,7 +95,25 @@ def _strip_ansi(text):
     return "".join(out)
 
 
+def restore_terminal(fd=None, saved=None):
+    """메뉴로 돌아갈 때 줄 입력과 키 에코를 강제로 복구한다."""
+    if termios is None:
+        return
+    try:
+        fd = sys.stdin.fileno() if fd is None else fd
+        attrs = list(saved) if saved is not None else termios.tcgetattr(fd)
+        attrs[0] |= termios.ICRNL
+        attrs[1] |= termios.OPOST
+        attrs[3] |= termios.ECHO | termios.ICANON | termios.ISIG
+        attrs[6][termios.VMIN] = 1
+        attrs[6][termios.VTIME] = 0
+        termios.tcsetattr(fd, termios.TCSANOW, attrs)
+    except (OSError, ValueError, termios.error):
+        pass
+
+
 def prompt(msg):
+    restore_terminal()
     try:
         return input(msg)
     except EOFError:
@@ -143,7 +161,4 @@ class Keys:
         if self.closed:
             return
         self.closed = True
-        try:
-            termios.tcsetattr(self.fd, termios.TCSANOW, self.old)
-        except (OSError, termios.error):
-            pass
+        restore_terminal(self.fd, self.old)

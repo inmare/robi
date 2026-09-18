@@ -14,6 +14,7 @@ from robot.tui import (
     clear_screen,
     draw_box,
     prompt,
+    restore_terminal,
 )
 
 ROOT = Path(__file__).resolve().parent
@@ -269,4 +270,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        restore_terminal()
