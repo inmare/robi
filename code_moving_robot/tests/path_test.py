@@ -17,6 +17,14 @@ from robot.path import (
     round_trip_points,
     round_trip_remaining,
 )
+from robot.session import maybe_auto_record
+
+
+class FakeOdo:
+    def __init__(self, x, y, yaw=0.0):
+        self.x = x
+        self.y = y
+        self.yaw = yaw
 
 
 def test_round_trip_goes_out_and_back():
@@ -87,6 +95,24 @@ def test_inbound_goes_home():
     assert rest[-1][0] < 0.2
 
 
+def test_spin_in_place_does_not_record():
+    start = [0.0, 0.0, 0.0]
+    waypoints = []
+    odo = FakeOdo(0.05, 0.02, 1.2)
+    out, _t, added = maybe_auto_record(odo, start, waypoints, 2.0, 0.0)
+    assert added is False
+    assert out == []
+
+
+def test_move_far_enough_records():
+    start = [0.0, 0.0, 0.0]
+    waypoints = []
+    odo = FakeOdo(0.40, 0.0, 0.1)
+    out, _t, added = maybe_auto_record(odo, start, waypoints, 2.0, 0.0)
+    assert added is True
+    assert len(out) == 1
+
+
 if __name__ == "__main__":
     test_round_trip_goes_out_and_back()
     test_remaining_from_middle()
@@ -96,4 +122,6 @@ if __name__ == "__main__":
     test_densify_keeps_ends()
     test_outbound_stops_at_goal()
     test_inbound_goes_home()
+    test_spin_in_place_does_not_record()
+    test_move_far_enough_records()
     print("path_test ok")

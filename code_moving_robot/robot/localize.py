@@ -18,8 +18,8 @@ def wrap_angle(a):
 
 MIN_OCC = 40
 MIN_HITS = 16
-MIN_LOCAL_SCORE = 0.08
-MIN_HEADING_SCORE = 0.18
+MIN_LOCAL_SCORE = 0.04
+MIN_HEADING_SCORE = 0.08
 
 
 class Match:
@@ -148,11 +148,11 @@ def match_yaw(grid, x, y, points, min_score=MIN_HEADING_SCORE):
     return Match(x, y, best_yaw, best_s)
 
 
-def match_along_route(grid, scan, route_xyz, lateral_m=0.55, min_score=0.08):
+def match_along_route(grid, scan, route_xyz, lateral_m=1.20, min_score=0.04):
     """경로 선과 그 옆(이탈)에서 스캔을 맞춘다. 점 위만 보면 옆에서 시작이 실패한다."""
     from robot.path import densify_route, lateral_offsets
 
-    samples = densify_route(route_xyz, step_m=0.40, max_n=24)
+    samples = densify_route(route_xyz, step_m=0.28, max_n=40)
     if len(samples) < 1 or not scan:
         return None
     ranked = []
@@ -160,8 +160,8 @@ def match_along_route(grid, scan, route_xyz, lateral_m=0.55, min_score=0.08):
         heading = yaw
         if i + 1 < len(samples):
             heading = math.atan2(samples[i + 1][1] - y, samples[i + 1][0] - x)
-        for lx, ly in lateral_offsets(x, y, heading, lateral_m, n=1):
-            found = match_yaw(grid, lx, ly, scan, min_score=0.05)
+        for lx, ly in lateral_offsets(x, y, heading, lateral_m, n=2):
+            found = match_yaw(grid, lx, ly, scan, min_score=0.03)
             if found is None:
                 continue
             ranked.append((found.score, i, found))
@@ -169,9 +169,9 @@ def match_along_route(grid, scan, route_xyz, lateral_m=0.55, min_score=0.08):
         return None
     ranked.sort(key=lambda row: row[0], reverse=True)
     best = None
-    for _score, _i, yaw_hit in ranked[:6]:
+    for _score, _i, yaw_hit in ranked[:8]:
         refined = match_heading(
-            grid, yaw_hit.x, yaw_hit.y, scan, xy_m=0.28, min_score=0.07
+            grid, yaw_hit.x, yaw_hit.y, scan, xy_m=0.45, min_score=0.04
         )
         cand = refined if refined is not None else yaw_hit
         if best is None or cand.score > best.score:
@@ -182,8 +182,8 @@ def match_along_route(grid, scan, route_xyz, lateral_m=0.55, min_score=0.08):
             yaw_hit.y,
             yaw_hit.yaw + math.pi,
             scan,
-            xy_m=0.18,
-            yaw_rad=0.45,
+            xy_m=0.35,
+            yaw_rad=0.70,
         )
         if back is not None and (best is None or back.score > best.score + 0.02):
             best = back
@@ -192,7 +192,7 @@ def match_along_route(grid, scan, route_xyz, lateral_m=0.55, min_score=0.08):
     return best
 
 
-def match_heading(grid, x, y, points, xy_m=0.35, min_score=MIN_HEADING_SCORE):
+def match_heading(grid, x, y, points, xy_m=0.55, min_score=MIN_HEADING_SCORE):
     """위치는 대략 알고 yaw는 모를 때. 한 바퀴를 다 본다."""
     if grid.occ_n < MIN_OCC:
         return None
@@ -203,9 +203,10 @@ def match_heading(grid, x, y, points, xy_m=0.35, min_score=MIN_HEADING_SCORE):
     best_s = -1e9
     second_s = -1e9
     second_yaw = None
-    for yaw in _frange(0.0, 2 * math.pi - 0.01, math.radians(10)):
-        for dx in _frange(-xy_m, xy_m, 0.10):
-            for dy in _frange(-xy_m, xy_m, 0.10):
+    xy_step = 0.12 if xy_m > 0.7 else 0.10
+    for yaw in _frange(0.0, 2 * math.pi - 0.01, math.radians(8)):
+        for dx in _frange(-xy_m, xy_m, xy_step):
+            for dy in _frange(-xy_m, xy_m, xy_step):
                 s = score_pose(grid, x + dx, y + dy, yaw, ds)
                 if s is None:
                     continue

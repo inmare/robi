@@ -25,7 +25,6 @@ from robot.pins import (
     LIDAR_STALL_S,
     RECORD_DT,
     RECORD_MIN_M,
-    RECORD_MIN_YAW,
     RECOVER_MAX,
     REJOIN_OFF_M,
     ROUTE_LATERAL_M,
@@ -69,13 +68,12 @@ def last_path_pose(start, waypoints, goal):
 
 
 def maybe_auto_record(odo, start, waypoints, now, last_t):
+    """이동 거리로만 빵가루를 남긴다. 제자리 회전 yaw만으로는 점을 안 찍는다."""
     if now - last_t < RECORD_DT:
         return waypoints, last_t, False
     last = last_path_pose(start, waypoints, None)
     dist = math.hypot(odo.x - last[0], odo.y - last[1])
-    last_yaw = last[2] if len(last) > 2 else 0.0
-    dyaw = abs(wrap_angle(odo.yaw - last_yaw))
-    if dist < RECORD_MIN_M and dyaw < RECORD_MIN_YAW:
+    if dist < RECORD_MIN_M:
         return waypoints, last_t, False
     if len(waypoints) >= 80:
         return waypoints, now, False
@@ -133,7 +131,7 @@ def apply_motion(drive, odo, motion, speed):
 def help_text():
     return (
         "wasd 이동  스페이스 정지  ↑↓ 속도  k 경로기록 on/off\n"
-        "수동: 1 시작  2 경유  3 도착  | 기록은 1초마다, 도착에서 k\n"
+        "수동: 1 시작  2 경유  3 도착  | 기록은 약 28cm 이동마다, 도착에서 k\n"
         "g 목적지로  b 원래 자리  r 왕복  t 수동  l 경로위치  p 좌표  S 저장  q 메뉴\n"
         "중앙 TCP가 붙어 있으면 같은 g/b를 센터에서도 보낼 수 있음. 여기 키가 우선"
     )
@@ -144,14 +142,14 @@ def snap_to_route(grid, odo, slam, scan, start, waypoints, goal, prefer_here=Tru
         return None
     outbound = recorded_route(start, waypoints, goal)
     local = match_scan(
-        grid, odo.x, odo.y, odo.yaw, scan, xy_m=0.40, yaw_rad=0.70
+        grid, odo.x, odo.y, odo.yaw, scan, xy_m=0.70, yaw_rad=1.00
     )
-    if local is None or local.score < 0.08:
-        local = match_heading(grid, odo.x, odo.y, scan, xy_m=0.45, min_score=0.08)
+    if local is None or local.score < 0.04:
+        local = match_heading(grid, odo.x, odo.y, scan, xy_m=0.80, min_score=0.04)
     route = None
     if len(outbound) >= 1:
         route = match_along_route(
-            grid, scan, outbound, lateral_m=ROUTE_LATERAL_M, min_score=0.07
+            grid, scan, outbound, lateral_m=ROUTE_LATERAL_M, min_score=0.04
         )
     best_name, best = None, None
     if prefer_here and local is not None:
@@ -184,8 +182,8 @@ def snap_to_route(grid, odo, slam, scan, start, waypoints, goal, prefer_here=Tru
 def restore_heading(grid, odo, lidar, data, quiet=False):
     if not quiet:
         print(c_dim("라이다 켜는 중. 위치 확인..."))
-    time.sleep(1.0)
-    points = collect_scan(lidar, n=6, timeout_s=12.0)
+    time.sleep(1.5)
+    points = collect_scan(lidar, n=8, timeout_s=14.0)
     if not points:
         if not quiet:
             print(c_warn("방향 맞춤용 스캔이 없습니다"))
@@ -201,18 +199,37 @@ def restore_heading(grid, odo, lidar, data, quiet=False):
     picks = []
     if outbound:
         found = match_along_route(
-            grid, points, outbound, lateral_m=ROUTE_LATERAL_M, min_score=0.08
+            grid, points, outbound, lateral_m=ROUTE_LATERAL_M, min_score=0.04
         )
         if found is not None:
             picks.append(("경로", found))
-    sx, sy = float(start[0]), float(start[1])
-    syaw = float(start[2]) if len(start) > 2 else 0.0
-    prior = match_scan(grid, sx, sy, syaw, points, xy_m=0.55, yaw_rad=0.85)
-    if prior is not None and prior.score >= 0.10:
-        picks.append(("시작점(저장각)", prior))
-    head = match_heading(grid, sx, sy, points, xy_m=0.55, min_score=0.10)
-    if head is not None:
-        picks.append(("시작점", head))
+    anchors = [(float(start[0]), float(start[1]), float(start[2]) if len(start) > 2 else 0.0, "시작점")]
+    if goal is not None:
+        anchors.append(
+            (
+                float(goal[0]),
+                float(goal[1]),
+                float(goal[2]) if len(goal) > 2 else 0.0,
+                "도착점",
+            )
+        )
+    if waypoints:
+        mid = waypoints[len(waypoints) // 2]
+        anchors.append(
+            (
+                float(mid[0]),
+                float(mid[1]),
+                float(mid[2]) if len(mid) > 2 else 0.0,
+                "경로중간",
+            )
+        )
+    for sx, sy, syaw, label in anchors:
+        prior = match_scan(grid, sx, sy, syaw, points, xy_m=1.10, yaw_rad=1.20)
+        if prior is not None and prior.score >= 0.05:
+            picks.append((f"{label}(저장각)", prior))
+        head = match_heading(grid, sx, sy, points, xy_m=1.10, min_score=0.05)
+        if head is not None:
+            picks.append((label, head))
     if not picks:
         if not quiet:
             print(c_err("이전 지도와 지금 스캔이 안 맞습니다"))
@@ -984,6 +1001,15 @@ def run_drive(
     except KeyboardInterrupt:
         print(c_warn("Ctrl+C"))
     finally:
+        import signal
+
+        prev_int = signal.getsignal(signal.SIGINT)
+        prev_term = signal.getsignal(signal.SIGTERM)
+        try:
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        except (ValueError, OSError):
+            pass
         for closer in (
             keys.close,
             lambda: center.close() if center is not None else None,
@@ -997,6 +1023,11 @@ def run_drive(
                 closer()
             except Exception:
                 pass
+        try:
+            signal.signal(signal.SIGINT, prev_int)
+            signal.signal(signal.SIGTERM, prev_term)
+        except (ValueError, OSError):
+            pass
         print(c_dim("라이다·모터 OFF"))
 
     return {

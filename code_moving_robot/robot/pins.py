@@ -31,7 +31,7 @@ FRONT_STOP_M = 0.35
 FRONT_STOP_DEG = 25.0
 ARRIVE_M = 0.15
 LOOKAHEAD_M = 0.45  # 경로 선 앞을 보고 조향. 옆에서 시작해도 다음 점으로 돌지 않게.
-ROUTE_LATERAL_M = 0.55  # 경로 옆에서 시작할 때 스캔 맞춤 폭
+ROUTE_LATERAL_M = 1.20  # 경로 옆에서 시작할 때 스캔 맞춤 폭
 REJOIN_OFF_M = 0.45  # 선에서 이보다 옆일 때만 A*. 다음 점까지 거리와 헷갈리지 말 것.
 INFLATE_M = 0.16
 STALL_S = 3.0
@@ -65,8 +65,8 @@ SCAN_DISK_FRONT_DEG = 55.0
 
 # 테스트 주행 때 경로를 시간마다 찍는다. 시연은 저장 JSON을 재생.
 RECORD_DT = 1.0
-RECORD_MIN_M = 0.25
-RECORD_MIN_YAW = 0.40
+RECORD_MIN_M = 0.28  # 제자리 회전만으로는 점을 안 찍고, 이만큼 이동했을 때만
+RECORD_MIN_YAW = 0.40  # 수동 참고용. 자동 기록은 거리만 본다
 
 # X4 원시 각은 시계 방향. 오도메트리는 반시계(+yaw).
 # SDK Inverted에 의존하지 않고 read()에서 곱한다. 좌우가 뒤집히면 +1.

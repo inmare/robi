@@ -109,15 +109,39 @@ class Lidar:
 
     def close(self):
         """모터를 끄고 포트를 닫는다. 프로그램 종료·미사용 시 이걸 쓴다."""
-        self.stop()
-        if self._open and self.laser is not None:
-            self.laser.disconnecting()
-        self.laser = None
-        self._open = False
+        import signal
+
+        if getattr(self, "_closing", False):
+            return
+        self._closing = True
+        prev_int = None
+        prev_term = None
         try:
-            force_motor_off(self.port)
-        except OSError:
+            prev_int = signal.getsignal(signal.SIGINT)
+            prev_term = signal.getsignal(signal.SIGTERM)
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        except (ValueError, OSError):
             pass
+        try:
+            self.stop()
+            if self._open and self.laser is not None:
+                self.laser.disconnecting()
+            self.laser = None
+            self._open = False
+            try:
+                force_motor_off(self.port)
+            except OSError:
+                pass
+        finally:
+            try:
+                if prev_int is not None:
+                    signal.signal(signal.SIGINT, prev_int)
+                if prev_term is not None:
+                    signal.signal(signal.SIGTERM, prev_term)
+            except (ValueError, OSError):
+                pass
+            self._closing = False
 
     def read(self):
         """한 바퀴. 실패면 None. 성공이면 [(angle_rad, range_m), ...]."""
