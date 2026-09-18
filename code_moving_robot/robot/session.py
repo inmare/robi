@@ -873,7 +873,7 @@ def run_drive(
                 motion = None
                 drive.stop(odo)
             elif ch in ("up", "+", "="):
-                speed = min(0.95, speed + 0.08)
+                speed = min(1.00, speed + 0.08)
                 apply_motion(drive, odo, motion, speed)
                 print(c_info(f"속도 {speed:.2f}"))
             elif ch in ("down", "-", "_"):
